@@ -217,8 +217,9 @@ function unzipPublic() {
     var method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), usize = buf.readUInt32LE(p + 24);
     var nlen = buf.readUInt16LE(p + 28), elen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32), lho = buf.readUInt32LE(p + 42);
     var name = buf.slice(p + 46, p + 46 + nlen).toString('utf8'); p += 46 + nlen + elen + clen;
-    if (name.indexOf('..') >= 0 || name.indexOf(':') >= 0) continue;
-    var rel = name.replace(/^public\//, ''); if (!rel || name.indexOf('public/') !== 0) continue;
+    if (name.indexOf('..') >= 0 || name.indexOf(':') >= 0 || name.indexOf('__MACOSX') >= 0) continue;
+    var rel = name.indexOf('public/') === 0 ? name.slice(7) : name.replace(/^\.\//, ''); // "public/index.html" ya da "index.html": iki biçim de olur
+    if (!rel) continue;
     var out = path.join(PUBLIC, rel);
     if (name.slice(-1) === '/') { fs.mkdirSync(out, { recursive: true }); continue; }
     var lnlen = buf.readUInt16LE(lho + 26), lelen = buf.readUInt16LE(lho + 28), dataOff = lho + 30 + lnlen + lelen;
@@ -233,7 +234,7 @@ Accounts.init({ publicDir: PUBLIC }, function (e, mode) { console.log('hesap dep
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.52. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.53. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
