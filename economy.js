@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    version: 'dongu-economy-1.2',           // belge "dongu-economy-1.1" + 12 El ve giriş merdiveni eklemeleri
+    version: 'dongu-economy-1.2.1',         // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları (5 Ekim 2026 görsel paketi)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -74,6 +74,11 @@
     { id: 'v_tv', name: 'Televizyon', cat: 'duvar', price: 1200, footprint: [1, 1], wall: true, tier: 2, sprite: 'tv', desc: 'Eski tüplü televizyon.' },
     { id: 'v_kahvemakinesi', name: 'Kahve makinesi', cat: 'uretim', price: 4000, footprint: [1, 1], kind: 'station', recipe: 'kahve', tier: 2, sprite: 'kahvemakinesi', desc: '30 dakikada 10 fincan kahve (20 altın girdi).' },
     { id: 'v_koltuk', name: 'Koltuk takımı', cat: 'dekor', price: 1800, footprint: [3, 2], tier: 2, sprite: 'koltuk', desc: 'Sosyal köşe.' },
+    { id: 'v_koltuktek', name: 'Tekli koltuk', cat: 'dekor', price: 700, footprint: [1, 1], tier: 1, sprite: 'koltukyan', desc: 'Deri tekli koltuk.' },
+    { id: 'v_vitrin', name: 'Vitrin', cat: 'dekor', price: 900, footprint: [1, 1], tier: 1, sprite: 'vitrin', desc: 'Camlı fincan vitrini.' },
+    { id: 'v_buzdolabi', name: 'Buzdolabı', cat: 'dekor', price: 1500, footprint: [1, 1], tier: 2, sprite: 'buzdolabi', desc: 'Eski tip buzdolabı (görünüm).' },
+    { id: 'v_tost', name: 'Tost tezgâhı', cat: 'dekor', price: 1200, footprint: [2, 1], tier: 2, sprite: 'tost', desc: 'Tost makineli tezgâh (görünüm; tost üretimi ileride).' },
+    { id: 'v_muzik', name: 'Müzik kutusu', cat: 'dekor', price: 2500, footprint: [1, 1], tier: 2, sprite: 'muzik', desc: 'Işıklı müzik kutusu.' },
     { id: 'v_slot', name: 'Slot makinesi', cat: 'eglence', price: 12000, footprint: [1, 1], tier: 3, sprite: 'slot', desc: 'Eğlence (ayrı özellik; henüz kapalı).', locked: true }
   ];
   var VENUE_STARTER = ['v_masa', 'v_cayocagi', 'v_sandalye', 'v_sandalye', 'v_hali']; // açılış paketi (bir kez)
