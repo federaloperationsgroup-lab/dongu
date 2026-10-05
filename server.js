@@ -52,7 +52,8 @@ function viewFor(r, seat) {
     totals: arr4(g.totals), handsWon: arr4(g.handsWon), penalties: arr4(g.penalties || [0, 0, 0, 0]), handPen: arr4(g.handPen || [0, 0, 0, 0]),
     rules: g.rules, names: arr4(g.names), players: [], table: [], history: [], handOver: null,
     totalHands: g.totalHands, currentHandIndex: g.currentHandIndex, handPenDisc: arr4(g.handPenDisc || [0, 0, 0, 0]),
-    prepLeft: (r.prepUntil && Date.now() < r.prepUntil) ? r.prepUntil - Date.now() : 0, charges: (r.charges || [0, 0, 0, 0])[seat] || 0
+    prepLeft: (r.prepUntil && Date.now() < r.prepUntil) ? r.prepUntil - Date.now() : 0, charges: (r.charges || [0, 0, 0, 0])[seat] || 0,
+    nextIn: (g.phase === 'handover' && !g.finished && r.nextAt) ? Math.max(0, r.nextAt - Date.now()) : 0, canNext: canStartNext(r, seat)
   };
   for (var i = 0; i < 4; i++) {
     var p = g.players[i], mine = i === seat;
@@ -70,12 +71,14 @@ function broadcastRoom(r) {
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws) send(s.ws, Object.assign({ you: i }, info)); });
 }
 function broadcastState(r, extra) {
+  if (r.g && r.g.phase === 'handover') scheduleNext(r); // el bitti: geri sayım görünüme girsin
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws) send(s.ws, Object.assign({ t: 'state', view: viewFor(r, i) }, extra || {})); });
 }
 
 // ---- oyun akışı ----
 // ---- Rakibin eline bak / Tokat: haklar, hedef ve süreler sunucuda ----
 var PEEK_MS = 8000, PREP_MS = 15000, MAX_SKINS = 5;
+var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 function beginPrep(r) {
   r.charges = r.seats.map(function (s) { return s && !s.bot ? Math.min(MAX_SKINS, Math.max(0, parseInt(s.skins) || 0)) : 0; }); // her elde yenilenir, birikmez
   r.peeks = {}; r.prepDone = {};
@@ -123,6 +126,7 @@ function accOf(m) { return m.acc && typeof m.acc.id === 'string' && typeof m.acc
 // el / maç bitince hesaplara ödül yaz (yalnızca hesabı olan gerçek oyuncular); sonucu oyuncuya 'reward' mesajıyla bildir
 function rewardIfOver(r) {
   var g = r.g; if (!g || g.phase !== 'handover') return;
+  scheduleNext(r);
   if (!r.rewarded) r.rewarded = {};
   if (r.rewarded[g.hand]) return; r.rewarded[g.hand] = true;
   var ho = g.handOver, humans = r.seats.filter(function (s) { return s && !s.bot && s.acc; }).length;
@@ -148,8 +152,19 @@ function startGame(r) {
   broadcastState(r, { event: 'handStart' });
   scheduleBots(r);
 }
+function scheduleNext(r) { // el bitti: NEXT_DELAY sonra sonraki el kendiliğinden başlar (oda sahibi kopsa ya da hızlı masada sahip olmasa da maç takılmaz)
+  var g = r.g; if (!g || g.phase !== 'handover' || g.finished || r.nextTimer) return;
+  r.nextAt = Date.now() + NEXT_DELAY;
+  r.nextTimer = setTimeout(function () { r.nextTimer = null; r.nextAt = 0; nextHand(r); }, NEXT_DELAY);
+}
+function canStartNext(r, seat) { // oda sahibi; sahip yoksa (hızlı masa) ya da sahibin bağlantısı koptuysa oturan her gerçek oyuncu
+  if (r.host == null) return true;
+  if (seat === r.host) return true;
+  var h = r.seats[r.host]; return !h || h.bot || !h.ws || h.ws.readyState !== 1;
+}
 function nextHand(r) {
   if (!r.g || r.g.phase !== 'handover' || r.g.finished) return;
+  clearTimeout(r.nextTimer); r.nextTimer = null; r.nextAt = 0;
   Okey.startHand(r.g);
   beginPrep(r);
   broadcastState(r, { event: 'handStart' });
@@ -234,7 +249,7 @@ Accounts.init({ publicDir: PUBLIC }, function (e, mode) { console.log('hesap dep
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.56. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.57. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
@@ -304,7 +319,7 @@ function handle(ws, me, m) {
   r = me.room; if (!r) throw new Error('önce odaya katıl');
   if (m.t === 'leave') { r.seats[me.seat] = r.g ? r.seats[me.seat] : null; if (r.g) r.seats[me.seat].ws = null; me.room = null; broadcastRoom(r); if (r.quick && !r.g && !r.seats.some(function (x) { return x && !x.bot; })) { clearTimeout(r.quickTimer); delete rooms[r.code]; } return; }
   if (m.t === 'start') { if (me.seat !== r.host) throw new Error('Oyunu yalnızca oda sahibi başlatır.'); if (r.g) throw new Error('zaten başladı'); startGame(r); return; }
-  if (m.t === 'next') { if (me.seat !== r.host) throw new Error('Sonraki eli oda sahibi başlatır.'); nextHand(r); return; }
+  if (m.t === 'next') { if (!canStartNext(r, me.seat)) throw new Error('Sonraki eli oda sahibi başlatır.'); nextHand(r); return; }
   if (m.t === 'act') {
     if (r.prepUntil && Object.keys(r.peeks || {}).length) throw new Error('Bakış sürerken hamle yapılamaz.');
     var res = handleAct(r, me.seat, m);

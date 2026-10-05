@@ -523,10 +523,15 @@
     var k = meldKind(tiles, g.ok);
     if (!k) throw new Error('geçersiz grup');
     if (tiles.length >= p.hand.length) throw new Error('atacak taş kalmalı');
+    checkInHand(p, tiles); // önce doğrula, sonra değiştir: yarım kalmış hamle olmasın
     tiles.forEach(function (t) { removeTile(p.hand, t); });
     markPlaced(g, tiles);
     g.table.push({ tiles: tiles.slice(), kind: k === 'any' ? (tiles.length > 4 ? 'run' : 'set') : k, owner: g.cp });
     log(g, g.names[g.cp] + ' yeni grup koydu');
+  }
+  function checkInHand(p, tiles) { // hepsi elde ve her taş bir kez
+    var seen = {};
+    tiles.forEach(function (t) { if (!t || seen[t.id]) throw new Error('aynı taş iki kez kullanılamaz'); seen[t.id] = true; if (p.hand.indexOf(t) < 0) throw new Error('taş elinde değil'); });
   }
 
   function canAddTo(g, meldIdx, tiles) {
@@ -543,8 +548,10 @@
     if (g.phase !== 'play') throw new Error('oynama sırası değil');
     var p = g.players[g.cp];
     if (!p.opened || lockedAfterOpen(g, p)) throw new Error(p.opened ? 'Açıldığın sırada işleme yapılmaz; bir sonraki sıranda işleyebilirsin.' : 'önce açılmalı');
+    if (!g.table[meldIdx]) throw new Error('per bulunamadı');
     if (!canAddTo(g, meldIdx, tiles)) throw new Error('bu gruba uymuyor');
     if (tiles.length >= p.hand.length) throw new Error('atacak taş kalmalı');
+    checkInHand(p, tiles);
     tiles.forEach(function (t) { removeTile(p.hand, t); });
     markPlaced(g, tiles);
     var m = g.table[meldIdx];
