@@ -2,13 +2,11 @@
 // Depo: DATABASE_URL varsa Postgres (Neon vb.), yoksa yerel JSON dosyası (data/players.json — Render'da her kurulumda sıfırlanır).
 'use strict';
 var crypto = require('crypto'), fs = require('fs'), path = require('path');
+var Economy = require('./economy.js'); // ödül, seviye, görev, günlük giriş, havuz: tek ekonomi modülü (sürümlü CONFIG)
 
-var START_COINS = 1000, BONUS_BASE = 200, BONUS_PER_LEVEL = 25, BONUS_GAP = 20 * 3600 * 1000;
-var MAX_LEVEL = 99;
-function xpNeed(level) { return 100 + 100 * level; } // bu seviyeden sonrakine geçmek için gereken XP (1→2: 200, 2→3: 300 …)
-function levelOf(xp) { var l = 1; while (l < MAX_LEVEL && xp >= xpNeed(l)) { xp -= xpNeed(l); l++; } return { level: l, into: xp, need: xpNeed(l) }; }
-// ödüller (12 el için; el sayısına göre orantılanır). Bota karşı tek oyuncu maçlarında yarısı.
-var HAND_XP = 10, HAND_WIN_XP = 15, MATCH_XP = [60, 35, 20, 10], MATCH_COINS = [300, 150, 75, 30];
+var START_COINS = Economy.CONFIG.welcomeGold;
+var RESULT_GAP = parseInt(process.env.RESULT_GAP_MS) || 30000; // antrenman eli bildirimi arası en az süre
+function levelOf(xp) { return Economy.levelOf(xp || 0); }
 
 var DB = null, mem = {}, FILE = path.join(__dirname, 'data', 'players.json'), saveTimer = null, mode = 'dosya';
 var catalog = {}; // ürün kimliği → fiyat (public/catalog.json'dan)
@@ -50,8 +48,8 @@ function cleanName(n) { n = String(n || 'Oyuncu').replace(/[<>]/g, '').trim().sl
 function cleanAvatar(a) { if (!a || typeof a !== 'object') return null; var o = {}; Object.keys(a).slice(0, 20).forEach(function (k) { var v = a[k]; if (typeof v === 'string') o[k] = v.slice(0, 40); else if (typeof v === 'number' || typeof v === 'boolean') o[k] = v; }); return o; }
 
 function publicView(p) {
-  var lv = levelOf(p.xp);
-  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, bonusReady: Date.now() - (p.lastBonus || 0) >= BONUS_GAP, bonusIn: Math.max(0, BONUS_GAP - (Date.now() - (p.lastBonus || 0))), mode: mode };
+  var now = Date.now(), lv = levelOf(p.xp), ec = Economy.summary(p, now);
+  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version };
 }
 function create(body, cb) {
   var p = { id: newId(), token: newToken(), name: cleanName(body.name), avatar: cleanAvatar(body.avatar), coins: START_COINS, xp: 0, owned: [], lastBonus: 0, stats: { hands: 0, matches: 0, wins: 0 }, created: Date.now(), lastSeen: Date.now() };
@@ -81,13 +79,19 @@ function me(body, cb) {
     cb(null, publicView(p));
   });
 }
-function bonus(body, cb) {
+function bonus(body, cb) { // günlük giriş ödülü (UTC günü başına bir kez)
   auth(body, function (e, p) {
     if (e) return cb(e);
-    if (Date.now() - (p.lastBonus || 0) < BONUS_GAP) return cb(new Error('Günlük bonus henüz hazır değil.'));
-    var lv = levelOf(p.xp), amount = BONUS_BASE + BONUS_PER_LEVEL * (lv.level - 1);
-    p.coins += amount; p.lastBonus = Date.now();
-    put(p, function (e2) { if (e2) return cb(e2); cb(null, { amount: amount, player: publicView(p) }); });
+    var r = Economy.loginReward(p, Date.now());
+    if (!r) return cb(new Error('Günlük giriş ödülü bugün alındı; yarın (03.00) yenilenir.'));
+    put(p, function (e2) { if (e2) return cb(e2); cb(null, { amount: r.gold, player: publicView(p) }); });
+  });
+}
+function tutorial(body, cb) { // eğitimi ilk tamamlama ödülü (bir kez)
+  auth(body, function (e, p) {
+    if (e) return cb(e);
+    var r = Economy.tutorialReward(p, Date.now());
+    put(p, function (e2) { if (e2) return cb(e2); cb(null, { reward: r, already: !r, player: publicView(p) }); });
   });
 }
 function buy(body, cb) {
@@ -101,37 +105,29 @@ function buy(body, cb) {
     put(p, function (e2) { if (e2) return cb(e2); cb(null, { player: publicView(p) }); });
   });
 }
-// ödül uygulama: maç içi (sunucu odaları doğrudan çağırır) ya da bota karşı maç sonucu (istemci bildirir, yarım ödül)
-function applyHand(p, won, scale) { var xp = Math.round((HAND_XP + (won ? HAND_WIN_XP : 0)) * scale); p.xp += xp; p.stats.hands++; return xp; }
-function applyMatch(p, rank, totalHands, scale) {
-  var f = Math.max(1, totalHands) / 12, i = Math.min(3, Math.max(0, rank - 1));
-  var xp = Math.round(MATCH_XP[i] * f * scale), coins = Math.max(1, Math.round(MATCH_COINS[i] * f * scale));
-  p.xp += xp; p.coins += coins; p.stats.matches++; if (rank === 1) p.stats.wins++;
-  return { xp: xp, coins: coins };
+function grant(acc, fn, cb) { // sunucu içi: oyuncuyu doğrula (id+token), fn ile değiştir (Economy.* çağrıları fn içinde), kaydet; fn hata atarsa kayıt değişmez
+  auth(acc, function (e, p) { if (e || !p) return cb && cb(e || new Error('yok')); var out; try { out = fn(p) || {}; } catch (ex) { return cb && cb(ex); } put(p, function (e2) { cb && cb(e2, out, publicView(p)); }); });
 }
-function levelReward(before, p) { // seviye atlayınca jeton ödülü
-  var after = levelOf(p.xp).level, got = 0;
-  for (var l = before + 1; l <= after; l++) got += 100 * l;
-  p.coins += got; return { from: before, to: after, coins: got };
+function releaseEscrows(cb) { // sunucu açılışı: odalar bellekte olduğundan yarım kalan emanetler iade edilir
+  var n = 0;
+  if (DB) { DB.query("SELECT data FROM players WHERE data ? 'escrow'").then(function (r) { r.rows.forEach(function (row) { var p = row.data; if (p.escrow) { p.coins = (p.coins || 0) + p.escrow.amount; delete p.escrow; n++; put(p); } }); cb && cb(n); }).catch(function () { cb && cb(-1); }); return; }
+  Object.keys(mem).forEach(function (id) { var p = mem[id]; if (p && p.escrow) { p.coins = (p.coins || 0) + p.escrow.amount; delete p.escrow; n++; put(p); } });
+  cb && cb(n);
 }
-function grant(acc, fn, cb) { // sunucu içi: oyuncuyu doğrula (id+token), fn ile değiştir, kaydet
-  auth(acc, function (e, p) { if (e || !p) return cb && cb(e || new Error('yok')); var before = levelOf(p.xp).level; var out = fn(p) || {}; var lr = levelReward(before, p); if (lr.to > lr.from) out.levelUp = lr; put(p, function (e2) { cb && cb(e2, out, publicView(p)); }); });
-}
-function result(body, cb) { // bota karşı tek oyuncu maç sonucu (istemci bildirir): sınırlı güven, yarım ödül, 2 dk'da en fazla bir maç
+function result(body, cb) { // botlara karşı tek oyuncu (antrenman) sonucu: istemci bildirir; her el için antrenman ödülü (günde ilk 5), sıralama bonusu yok
   auth(body, function (e, p) {
     if (e) return cb(e);
-    var th = [1, 6, 12].indexOf(body.totalHands) >= 0 ? body.totalHands : 12, rank = Math.min(4, Math.max(1, parseInt(body.rank) || 4));
-    var hands = Math.min(th, Math.max(1, parseInt(body.hands) || th)), wins = Math.min(hands, Math.max(0, parseInt(body.handWins) || 0));
-    var minGap = Math.min(hands, th) * 30 * 1000; // el başına en az 30 sn geçmiş olmalı
-    if (Date.now() - (p.lastResult || 0) < minGap) return cb(new Error('Çok hızlı maç bildirimi.'));
-    var before = levelOf(p.xp).level;
-    var hx = 0; for (var i = 0; i < hands; i++) hx += applyHand(p, i < wins, 0.5);
-    var got = applyMatch(p, rank, th, 0.5); got.handXp = hx;
-    var lr = levelReward(before, p); if (lr.to > lr.from) got.levelUp = lr;
-    p.lastResult = Date.now();
-    put(p, function (e2) { if (e2) return cb(e2); cb(null, { reward: got, player: publicView(p) }); });
+    var hands = Math.min(12, Math.max(1, parseInt(body.hands) || 1)), now = Date.now();
+    var minGap = hands * RESULT_GAP; // el başına en az 30 sn geçmiş olmalı (hızlı sahte bildirim engeli)
+    if (now - (p.lastResult || 0) < minGap) return cb(new Error('Çok hızlı maç bildirimi.'));
+    var gold = 0, xp = 0, lines = [], lu = null;
+    for (var i = 0; i < hands; i++) { var r = Economy.settleTraining(p, { ranks: [1, 2, 3, 4], me: 0, humans: 1 }, now); gold += r.gold; xp += r.xp; if (r.levelUp) lu = r.levelUp; lines = lines.concat(r.lines); }
+    p.lastResult = now;
+    put(p, function (e2) { if (e2) return cb(e2); cb(null, { reward: { handXp: xp, coins: gold, levelUp: lu, lines: lines, training: true }, player: publicView(p) }); });
   });
 }
+var routes = []; // ek modüller (kıraathane vb.): {prefix, fn(url, body, cb)}
+function route(prefix, fn) { routes.push({ prefix: prefix, fn: fn }); }
 // HTTP: POST /api/... JSON gövde
 function handleHttp(req, res, url) {
   if (url.indexOf('/api/') !== 0) return false;
@@ -140,14 +136,15 @@ function handleHttp(req, res, url) {
   req.on('data', function (c) { size += c.length; if (size > 20000) { req.destroy(); return; } chunks.push(c); });
   req.on('end', function () {
     var body = {}; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (e) {}
-    var fn = { '/api/guest': create, '/api/me': me, '/api/bonus': bonus, '/api/buy': buy, '/api/result': result }[url];
-    if (!fn) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"yok"}'); return; }
-    fn(body, function (e, out) {
+    var done = function (e, out) {
       res.writeHead(e ? 400 : 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(e ? { error: e.message } : out));
-    });
+    };
+    var fn = { '/api/guest': create, '/api/me': me, '/api/bonus': bonus, '/api/buy': buy, '/api/result': result, '/api/tutorial': tutorial }[url];
+    if (!fn) { for (var i = 0; i < routes.length; i++) if (url.indexOf(routes[i].prefix) === 0) { try { routes[i].fn(url, body, done); } catch (ex) { done(ex); } return; } res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"yok"}'); return; }
+    fn(body, done);
   });
   return true;
 }
 function ownsIntro(p, val) { return Object.keys(catalog).some(function (id) { var c = catalog[id]; return c.cat === 'intro' && c.val === val && p.owned.indexOf(id) >= 0; }); }
-module.exports = { init: init, handleHttp: handleHttp, auth: auth, ownsIntro: ownsIntro, grant: grant, applyHand: applyHand, applyMatch: applyMatch, levelOf: levelOf, publicView: publicView, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
+module.exports = { init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
