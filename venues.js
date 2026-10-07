@@ -23,17 +23,28 @@ function put(v) {
 }
 function newCode() { var s = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', c; do { c = ''; for (var i = 0; i < 5; i++) c += s[Math.floor(Math.random() * s.length)]; } while (byCode[c]); return c; }
 function iid() { return 'i_' + crypto.randomBytes(4).toString('hex'); }
-function ofOwner(id) { return mem[id] || null; }
-function ofCode(code) { return byCode[String(code || '').toUpperCase()] || null; }
+function ofOwner(id) { var v = mem[id] || null; if (v) migrateGrid(v); return v; }
+function ofCode(code) { var v = byCode[String(code || '').toUpperCase()] || null; if (v) migrateGrid(v); return v; }
 
-// Başlangıç yerleşimi (şablon): masa ortada, çay ocağı arka sol, kilim masanın altında, sandalyeler dekor
-function starterLayout(inv) {
-  var find = function (item, n) { var k = 0; for (var i = 0; i < inv.length; i++) if (inv[i].item === item && k++ === n) return inv[i].iid; return null; };
-  return [
-    // 7 Ekim 2026: başlangıç yerleşimi kapının önünde toplu (masa kapının karşısında, çay ocağı arka duvarda, sandalyeler sağda); eski kayıtlar kendi yerleşimini korur
-    { iid: find('v_hali', 0), gx: 4, gy: 3, rot: 0 }, { iid: find('v_masa', 0), gx: 5, gy: 3, rot: 0 },
-    { iid: find('v_cayocagi', 0), gx: 3, gy: 1, rot: 0 }, { iid: find('v_sandalye', 0), gx: 9, gy: 3, rot: 0 }, { iid: find('v_sandalye', 1), gx: 10, gy: 3, rot: 0 }
-  ].filter(function (p) { return p.iid; });
+// Başlangıç yerleşimi (şablon) ortak kodda: Economy.starterLayout (10×6 oda; masa+sandalyeler+kilim bir grup, çay ocağı arka duvarda)
+function starterLayout(inv) { return Economy.starterLayout(inv); }
+// v9.68 oda ölçeği (12×7 → 10×6): eski kayıtlı yerleşim kendiliğinden yeni örnek düzene ÇEVRİLMEZ; yalnız yeni ızgaraya sığdırılır:
+// her eşya oransal olarak yeni hücreye taşınır, çakışan/kural bozan eşya yakın boş hücreye alınır, yer bulunamazsa envantere düşer. Sahibine bir kez bildirilir (migrated).
+function migrateGrid(v) {
+  if (v.gridVersion === Economy.VENUE_GRID.version) return false;
+  var G1 = Economy.VENUE_GRID_V1, G = Economy.VENUE_GRID, inv = v.inventory || [], byIid = {}; inv.forEach(function (it) { byIid[it.iid] = it; });
+  var out = [], moved = 0, dropped = [];
+  var order = (v.placements || []).slice().sort(function (a, b) { var ia = Economy.venueItem((byIid[a.iid] || {}).item) || {}, ib = Economy.venueItem((byIid[b.iid] || {}).item) || {}; var ra = ia.kind === 'table' ? 0 : ia.kind === 'station' ? 1 : ia.floor ? 3 : 2, rb = ib.kind === 'table' ? 0 : ib.kind === 'station' ? 1 : ib.floor ? 3 : 2; return ra - rb; });
+  order.forEach(function (p) {
+    var inv1 = byIid[p.iid], it = inv1 && Economy.venueItem(inv1.item); if (!it) return;
+    var gx = Math.round(p.gx * (G.cols - 1) / (G1.cols - 1)), gy = it.wall ? 0 : Math.round(p.gy * (G.rows - 1) / (G1.rows - 1));
+    var placed = false, cand = [];
+    for (var r = 0; r <= 3 && !placed; r++) { for (var dy = -r; dy <= r && !placed; dy++) for (var dx = -r; dx <= r && !placed; dx++) { if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; var q = { iid: p.iid, gx: gx + dx, gy: it.wall ? 0 : gy + dy, rot: p.rot | 0 }; var test = out.concat([q]); if (Economy.validateLayout(test, inv).ok) { out.push(q); placed = true; if (dx || dy || q.gx !== p.gx || q.gy !== p.gy) moved++; } } }
+    if (!placed) dropped.push(it.name);
+  });
+  v.placements = out; v.gridVersion = G.version; v.layoutVersion = (v.layoutVersion | 0) + 1;
+  v.migrated = { at: Date.now(), moved: moved, dropped: dropped };
+  syncStations(v); put(v); return true;
 }
 function create(p, body) {
   if (mem[p.id]) throw new Error('Zaten bir kıraathanen var.');
@@ -41,7 +52,7 @@ function create(p, body) {
   var theme = ['koy', 'kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag'].indexOf(body.theme) >= 0 ? body.theme : 'koy';
   var inv = Economy.VENUE_STARTER.map(function (item) { return { iid: iid(), item: item, since: Date.now() }; });
   var v = { ownerId: p.id, ownerName: p.name, code: newCode(), name: name, theme: theme, tier: 1, reputation: C.openGift.reputation, kasa: C.openGift.gold, uncollected: 0, layoutVersion: 1, inventory: inv, placements: [], visibility: 'public', production: { stations: {} }, stats: { visits: 0, matches: 0 }, quests: { firstFriend: false }, host: { day: '', matches: 0, gold: 0, rep: 0, groups: {} }, created: Date.now() };
-  v.placements = starterLayout(inv);
+  v.placements = starterLayout(inv); v.gridVersion = Economy.VENUE_GRID.version;
   syncStations(v);
   put(v); return v;
 }
@@ -53,7 +64,7 @@ function syncStations(v) { // yerleştirilmiş üretim istasyonları için üret
 function ownerView(v, now) { // sahibine tam görünüm
   Economy.settleProduction(v, now || Date.now());
   var t = Economy.venueTier(v.tier), next = Economy.CONFIG.venue.tiers[v.tier] || null;
-  return { code: v.code, name: v.name, theme: v.theme, tier: v.tier, tierName: t.name, tables: t.tables, reputation: v.reputation, kasa: v.kasa, uncollected: v.uncollected || 0, layoutVersion: v.layoutVersion, inventory: v.inventory, placements: v.placements, production: v.production, stats: v.stats, host: v.host, quests: v.quests, next: next ? { tier: next.tier, name: next.name, price: next.price, reputation: next.reputation, tables: next.tables } : null, ownerName: v.ownerName, ownerId: v.ownerId, mine: true };
+  return { code: v.code, name: v.name, theme: v.theme, tier: v.tier, tierName: t.name, tables: t.tables, reputation: v.reputation, kasa: v.kasa, uncollected: v.uncollected || 0, layoutVersion: v.layoutVersion, inventory: v.inventory, placements: v.placements, production: v.production, stats: v.stats, host: v.host, quests: v.quests, next: next ? { tier: next.tier, name: next.name, price: next.price, reputation: next.reputation, tables: next.tables } : null, ownerName: v.ownerName, ownerId: v.ownerId, mine: true, migrated: v.migrated && !v.migrated.seen ? { moved: v.migrated.moved, dropped: v.migrated.dropped } : null, gridVersion: v.gridVersion };
 }
 function guestView(v, now) { // ziyaretçi görünümü: kasa/üretim ayrıntısı yok
   Economy.settleProduction(v, now || Date.now());
@@ -149,6 +160,7 @@ function handleHttp(url, body, cb) {
         case 'upgrade': if (!v) throw new Error('Kıraathanen yok.'); upgrade(v); out = { venue: ownerView(v, now) }; break;
         case 'produce': if (!v) throw new Error('Kıraathanen yok.'); produce(v, body, now); out = { venue: ownerView(v, now) }; break;
         case 'collect': if (!v) throw new Error('Kıraathanen yok.'); var amt = collect(v, now); out = { venue: ownerView(v, now), collected: amt }; break;
+        case 'migrated-seen': if (!v) throw new Error('Kıraathanen yok.'); if (v.migrated) { v.migrated.seen = true; put(v); } out = { venue: ownerView(v, now) }; break; // oda ölçeği dönüşüm bildirimi bir kez gösterilir
         case 'order': var tv = ofCode(body.code); if (!tv) throw new Error('Kıraathane bulunamadı.'); out = { order: serviceOrder(tv, p, body, now), venue: guestView(tv, now) }; break;
         default: throw new Error('bilinmeyen işlem');
       }

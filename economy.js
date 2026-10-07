@@ -59,7 +59,7 @@
   // footprint: [en, boy] hücre; wall: duvar eşyası (zemine değil, arka duvar şeridine); kind: 'table' oyun masası, 'station' üretim; price: kasa altını
   var VENUE_ITEMS = [
     { id: 'v_masa', name: 'Okey masası', cat: 'masa', price: 1500, footprint: [2, 2], kind: 'table', seats: 4, tier: 1, sprite: 'masa', desc: 'Dört kişilik oynanabilir masa; etrafındaki 4 hücre koltuk için boş kalır.' },
-    { id: 'v_sandalye', name: 'Sandalye', cat: 'masa', price: 120, footprint: [1, 1], rot: true, tier: 1, sprite: 'sandalye', desc: 'Dekor sandalye (masanın koltukları otomatik gelir).' },
+    { id: 'v_sandalye', name: 'Sandalye', cat: 'masa', price: 120, footprint: [1, 1], rot: true, tier: 1, sprite: 'sandalye', kind: 'chair', desc: 'Masanın koltuk hücresine konabilir; oyuncu sandalyenin yanına gelip oturur.' },
     { id: 'v_cayocagi', name: 'Çay ocağı', cat: 'uretim', price: 2500, footprint: [2, 1], kind: 'station', recipe: 'cay', tier: 1, sprite: 'cayocagi', desc: '20 dakikada 10 servis çay üretir (10 altın girdi).' },
     { id: 'v_tezgah', name: 'Servis tezgâhı', cat: 'uretim', price: 800, footprint: [3, 1], tier: 1, sprite: 'tezgah', desc: 'Servis alanı; yalnız görünüm.' },
     { id: 'v_hali', name: 'Kilim', cat: 'dekor', price: 400, footprint: [3, 2], floor: true, tier: 1, sprite: 'hali', desc: 'Zemine serilir; üstüne eşya konabilir.' },
@@ -83,8 +83,20 @@
   ];
   var VENUE_STARTER = ['v_masa', 'v_cayocagi', 'v_sandalye', 'v_sandalye', 'v_hali']; // açılış paketi (bir kez)
   // zemin ızgarası: perspektifli yamuk; kapı alt kenar ortasında; duvar şeridi arka duvarda (wallCols sütun)
-  var VENUE_GRID = { cols: 12, rows: 7, x0: 800, yTop: 330, yBot: 790, wTop: 980, wBot: 1440, wallY: 250, doorCols: [5, 6], serviceRow: 6 };
+  // v9.68: oda 10×6 hücre (önce 12×7). 1 hücre = 0,70 m; ön sırada 150 px (önce 120). Arka duvar 1120 px genişliğinde (boyalı odaların duvar tabanıyla aynı), ön sıra 1500 px.
+  // Böylece boyalı pencere/duvar/döşeme karaktere göre %25 küçülür: pencere eşiği ~1 m, döşeme taşı ~1 hücre; oda 7 × 4,2 m (önce 8,4 × 4,9).
+  var VENUE_GRID = { cols: 10, rows: 6, x0: 800, yTop: 345, yBot: 790, wTop: 1120, wBot: 1500, wallY: 250, doorCols: [4, 5], serviceRow: 5, version: 2 };
+  var VENUE_GRID_V1 = { cols: 12, rows: 7, x0: 800, yTop: 330, yBot: 790, wTop: 980, wBot: 1440, wallY: 250, doorCols: [5, 6], serviceRow: 6, version: 1 }; // eski kayıtların dönüşümü için
   function venueItem(id) { for (var i = 0; i < VENUE_ITEMS.length; i++) if (VENUE_ITEMS[i].id === id) return VENUE_ITEMS[i]; return null; }
+  // Başlangıç / örnek yerleşim (10×6): masa ortada (4,2 → 4..5 × 2..3), kilim altında, sandalyeler masanın sol ve sağ koltuğunda (masaya dönük), çay ocağı arka sağ duvarda. Envanterdeki ilk uygun eşyalar kullanılır; olmayan atlanır.
+  function starterLayout(inv) {
+    var used = {}; var find = function (item) { for (var i = 0; i < inv.length; i++) if (inv[i].item === item && !used[inv[i].iid]) { used[inv[i].iid] = true; return inv[i].iid; } return null; };
+    return [
+      { iid: find('v_hali'), gx: 3, gy: 2, rot: 0 }, { iid: find('v_masa'), gx: 4, gy: 2, rot: 0 },
+      { iid: find('v_sandalye'), gx: 3, gy: 2, rot: 1 }, { iid: find('v_sandalye'), gx: 6, gy: 3, rot: 3 },
+      { iid: find('v_cayocagi'), gx: 7, gy: 0, rot: 0 }
+    ].filter(function (p) { return p.iid; });
+  }
   function venueTier(t) { return CONFIG.venue.tiers[Math.max(0, Math.min(5, (t || 1) - 1))]; }
   // hücre → sahne koordinatı (alt-orta çapa). gx: 0..cols-1, gy: 0..rows-1 (0 = en arka)
   function cellPos(gx, gy, G) {
@@ -126,12 +138,14 @@
       if (item.kind === 'table') tables.push({ p: p, item: item, iid: p.iid });
     });
     // koltuk hücreleri boş ve zemin içinde olmalı
-    tables.forEach(function (t) { seatCells(t.item, t.p).forEach(function (c) { if (c.gx < 0 || c.gy < 0 || c.gx >= G.cols || c.gy >= G.rows) errors.push(t.item.name + ' koltuğu zemin dışında'); else if (occ[key(c)] && !occ[key(c)].floor) errors.push(t.item.name + ' koltuğu ' + occ[key(c)].name + ' ile kapanmış'); }); });
+    // koltuk hücresi boş ya da sandalyeli olabilir (sandalye koltuğun kendisidir); başka eşya koltuğu kapatamaz
+    tables.forEach(function (t) { seatCells(t.item, t.p).forEach(function (c) { if (c.gx < 0 || c.gy < 0 || c.gx >= G.cols || c.gy >= G.rows) errors.push(t.item.name + ' koltuğu zemin dışında'); else if (occ[key(c)] && !occ[key(c)].floor && occ[key(c)].kind !== 'chair') errors.push(t.item.name + ' koltuğu ' + occ[key(c)].name + ' ile kapanmış'); }); });
     // yürünebilir hücreler: dolu olmayan (kilim yürünebilir) hücreler; kapıdan BFS
     var walk = {}; for (var gy = 0; gy < G.rows; gy++) for (var gx = 0; gx < G.cols; gx++) { var k = gx + ',' + gy; walk[k] = !occ[k] || !!occ[k].floor; }
     var reach = {}, q = []; G.doorCols.forEach(function (gx) { var k = gx + ',' + (G.rows - 1); if (walk[k]) { reach[k] = true; q.push([gx, G.rows - 1]); } });
     while (q.length) { var c = q.shift(); [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) { var nx = c[0] + d[0], ny = c[1] + d[1], nk = nx + ',' + ny; if (nx < 0 || ny < 0 || nx >= G.cols || ny >= G.rows || reach[nk] || !walk[nk]) return; reach[nk] = true; q.push([nx, ny]); }); }
-    tables.forEach(function (t) { var okSeat = seatCells(t.item, t.p).some(function (c) { return reach[c.gx + ',' + c.gy]; }); if (!okSeat) errors.push(t.item.name + ' kapıdan ulaşılamıyor (yol kapalı)'); });
+    // masa erişimi: bir koltuk hücresine yürünebiliyorsa ya da sandalyeli koltuğun komşusuna yürünebiliyorsa
+    tables.forEach(function (t) { var okSeat = seatCells(t.item, t.p).some(function (c) { var k = c.gx + ',' + c.gy; if (reach[k]) return true; if (occ[k] && occ[k].kind === 'chair') return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(function (d) { return reach[(c.gx + d[0]) + ',' + (c.gy + d[1])]; }); return false; }); if (!okSeat) errors.push(t.item.name + ' kapıdan ulaşılamıyor (yol kapalı)'); });
     var stations = placements.filter(function (p) { var inv = byIid[p.iid]; var it = inv && venueItem(inv.item); return it && it.kind === 'station'; });
     stations.forEach(function (p) { var it = venueItem(byIid[p.iid].item); var cells = footprintCells(it, p); var near = false; cells.forEach(function (c) { [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) { if (reach[(c.gx + d[0]) + ',' + (c.gy + d[1])]) near = true; }); }); if (!near) errors.push(it.name + ' önüne yürünemiyor'); });
     return { ok: errors.length === 0, errors: errors, reach: reach, walk: walk, occ: occ };
@@ -309,5 +323,5 @@
     return { total: total, fee: fee, net: net, shares: shares, undistributed: 0 };
   }
 
-  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps };
+  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps };
 }));
