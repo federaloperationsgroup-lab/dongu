@@ -54,7 +54,8 @@ function viewFor(r, seat) {
     totals: arr4(g.totals), handsWon: arr4(g.handsWon), penalties: arr4(g.penalties || [0, 0, 0, 0]), handPen: arr4(g.handPen || [0, 0, 0, 0]),
     rules: g.rules, names: arr4(g.names), players: [], table: [], history: [], handOver: null,
     totalHands: g.totalHands, currentHandIndex: g.currentHandIndex, handPenDisc: arr4(g.handPenDisc || [0, 0, 0, 0]),
-    prepLeft: (r.prepUntil && Date.now() < r.prepUntil) ? r.prepUntil - Date.now() : 0, charges: (r.charges || [0, 0, 0, 0])[seat] || 0,
+    prepLeft: (r.prepUntil && Date.now() < r.prepUntil) ? r.prepUntil - Date.now() : 0, charges: (r.charges || [0, 0, 0, 0])[seat] || 0, freeBak: seatFree(r.seats[seat], 'bak'),
+    peeks: Object.keys(r.peeks || {}).map(function (f) { var pk = r.peeks[f], o = { from: rot(parseInt(f)), target: rot(pk.target), left: Math.max(0, pk.until - Date.now()) }; if (parseInt(f) === seat) o.hand = g.players[pk.target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }); return o; }), // süren bakışlar (yeniden bağlanınca animasyon ve tokat düğmesi kalan süreyle geri gelir; taşlar yalnız bakanın kendi görünümünde)
     nextIn: (g.phase === 'handover' && !g.finished && r.nextAt) ? Math.max(0, r.nextAt - Date.now()) : 0, canNext: canStartNext(r, seat),
     econ: { humans: humanCount(r), coef: Economy.humanCoef(humanCount(r)), training: humanCount(r) <= 1, stake: r.settings.stake || 'sosyal', entry: r.settings.entry || 0, version: Economy.CONFIG.version }
   };
@@ -152,9 +153,10 @@ function beginPrep(r) {
   var humans = r.seats.some(function (s) { return s && !s.bot && s.ws && s.ws.readyState === 1; });
   r.prepUntil = humans ? Date.now() + PREP_MS : 0;
 }
+function seatFree(s, id) { return (s && s.free && s.free[id]) || 0; } // koltuğun hesaptan okunmuş ücretsiz skin hakları (sanitizeSeat doldurur)
 function endPeek(r, from, reason) {
   var p = r.peeks[from]; if (!p) return; clearTimeout(p.timer); clearTimeout(p.botTimer); delete r.peeks[from];
-  if (r.charges[from] > 0 && r.prepUntil) r.prepUntil = Math.max(r.prepUntil, Date.now() + 6000); // kalan hak için 6 sn ek süre
+  if ((r.charges[from] > 0 || seatFree(r.seats[from], 'bak') > 0) && r.prepUntil) r.prepUntil = Math.max(r.prepUntil, Date.now() + 6000); // kalan hak için 6 sn ek süre
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws) send(s.ws, { t: 'peekEnd', from: rotateIdx(from, i), target: rotateIdx(p.target, i), reason: reason }); });
   log(r, r.seats[from].name + ' bakışı bitti: ' + reason);
 }
@@ -162,16 +164,20 @@ function handlePeek(r, seat, m) {
   var g = r.g; if (!g) throw new Error('oyun başlamadı');
   if (!r.prepUntil || Date.now() >= r.prepUntil) throw new Error('Yetenek yalnızca el başındaki hazırlık aşamasında kullanılır.');
   if (r.peeks[seat]) throw new Error('Zaten bir rakibe bakıyorsun.');
-  if (!(r.charges[seat] > 0)) throw new Error('Bu elde kullanım hakkın kalmadı.');
+  var me = r.seats[seat], usedFree = false;
+  if (!(r.charges[seat] > 0) && !(seatFree(me, 'bak') > 0)) throw new Error('Bu elde kullanım hakkın kalmadı.');
   var target = (parseInt(m.target) + seat) % 4; // istemci döndürülmüş koltuk gönderir
   if (isNaN(target) || target === seat || target < 0 || target > 3) throw new Error('geçersiz hedef');
-  r.charges[seat]--;
+  if (r.charges[seat] > 0) r.charges[seat]--;
+  else { // ücretsiz başlangıç hakkı: kullanım kabul edildiği anda hesaptan düşer (bir kez; yakalanınca geri gelmez)
+    usedFree = true; me.free.bak--;
+    Accounts.grant(me.acc, function (p) { Accounts.useFreeSkin(p, 'bak'); return {}; }, function (e, out, view) { if (!e && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'me', player: view }); });
+  }
   var until = Date.now() + PEEK_MS, pk = { target: target, until: until };
   r.peeks[seat] = pk;
   if (r.prepUntil < until + 500) r.prepUntil = until + 500; // bakış sürerken oyun başlamaz
   pk.timer = setTimeout(function () { endPeek(r, seat, 'time'); }, PEEK_MS);
-  var me = r.seats[seat];
-  send(me.ws, { t: 'peek', target: rotateIdx(target, seat), charges: r.charges[seat], left: PEEK_MS, hand: g.players[target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }) }); // taşlar sadece bakana
+  send(me.ws, { t: 'peek', target: rotateIdx(target, seat), charges: r.charges[seat], free: seatFree(me, 'bak'), usedFree: usedFree, left: PEEK_MS, hand: g.players[target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }) }); // taşlar sadece bakana
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && i !== seat) send(s.ws, { t: 'peekAnim', from: rotateIdx(seat, i), target: rotateIdx(target, i), left: PEEK_MS }); });
   var ts = r.seats[target];
   if (ts.bot || !ts.ws || ts.ws.readyState !== 1) { if (Math.random() < 0.45) pk.botTimer = setTimeout(function () { if (r.peeks[seat] === pk) endPeek(r, seat, 'slap'); }, 1500 + Math.random() * 5000); }
@@ -188,9 +194,23 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   if (!s) return;
   if (!s.acc) { s.skins = 0; if (s.avatar) delete s.avatar.intro; return; }
   Accounts.auth(s.acc, function (e, p) {
-    if (e || !p) { s.skins = 0; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
+    if (e || !p) { s.skins = 0; s.free = null; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
     s.skins = Accounts.introCount(p);
-    if (s.avatar) { var before = JSON.stringify(s.avatar); s.avatar = Accounts.cleanCosmetics(p, Accounts.cleanAvatar(s.avatar)); if (s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) delete s.avatar.intro; if (JSON.stringify(s.avatar) !== before) broadcastRoom(r); } // masadaki görünüm hesaptaki sahipliğe göre (ücretli kozmetik + Masa Giriş Skini)
+    if (Accounts.ensureSkinGift(p)) Accounts.save(p);
+    s.free = Object.assign({}, p.freeSkins || {}); // ücretsiz başlangıç hakları (Çaktırmadan Bak + Masa Giriş Skini denemesi); kullanımda hesaptan düşer
+    if (s.avatar) {
+      var before = JSON.stringify(s.avatar); s.avatar = Accounts.cleanCosmetics(p, Accounts.cleanAvatar(s.avatar)); s.introTrial = null;
+      if (s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) { if (Accounts.freeLeft(p, s.avatar.intro) > 0) s.introTrial = s.avatar.intro; else delete s.avatar.intro; } // sahip değil: ücretsiz deneme hakkı varsa bu maç için kalır (maç başında düşer), yoksa kalkar
+      if (JSON.stringify(s.avatar) !== before) broadcastRoom(r);
+    } // masadaki görünüm hesaptaki sahipliğe göre (ücretli kozmetik + Masa Giriş Skini)
+  });
+}
+function consumeIntroTrials(r) { // maç başladı (1. el): deneme olarak kuşanılmış Masa Giriş Skini herkese bir kez oynar; hak bu anda düşer (sayfa yenileme / yeniden bağlanma yeni gösterim vermez: matchId)
+  r.seats.forEach(function (s) {
+    if (!s || s.bot || !s.introTrial || !s.acc) return;
+    var id = s.introTrial; s.introTrial = null; if (s.free && s.free[id] > 0) s.free[id]--;
+    Accounts.grant(s.acc, function (p) { Accounts.useFreeSkin(p, id); return {}; }, function (e, out, view) { if (!e && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'me', player: view, introTrialUsed: id }); });
+    log(r, s.name + ' Masa Giriş Skini denemesi: ' + id);
   });
 }
 function accOf(m) { return m.acc && typeof m.acc.id === 'string' && typeof m.acc.token === 'string' ? { id: m.acc.id.slice(0, 40), token: m.acc.token.slice(0, 80) } : null; }
@@ -233,6 +253,7 @@ function startGame(r) {
   r.elig = null; r.factors = null; r.rewarded = {}; r.matchStart = Date.now(); r.actsAll = [0, 0, 0, 0]; r.pooled = false; r.actsTot = null; r.botActsTot = null; r.forfeit = null; r.poolExtra = 0; // yeni maç: katılım ve ödül kayıtları sıfır
   Okey.startHand(r.g);
   beginPrep(r);
+  consumeIntroTrials(r);
   log(r, 'oyun başladı');
   broadcastRoom(r);
   broadcastState(r, { event: 'handStart' });
@@ -340,7 +361,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.69. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.70. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
