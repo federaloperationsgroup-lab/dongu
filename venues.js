@@ -1,6 +1,9 @@
 // Döngü — Kıraathane (oyuncunun kendi mekânı): kayıt, envanter, yerleşim, kasa, üretim, ev sahipliği ödülü.
 // Depo: hesaplarla aynı (dosya data/venues.json ya da Postgres venues tablosu). Kurallar/sayılar Economy.CONFIG.venue ve VENUE_ITEMS'ta.
 'use strict';
+
+// Varsayılan mekân adı 24 karakteri aşmaz: '<ad> Kıraathanesi' sığmazsa '<ad> Kahvesi', o da sığmazsa ad kısaltılır (sessiz kesilme yok).
+function defaultVenueName(n) { n = String(n || 'Misafir').trim(); var a = n + ' Kıraathanesi'; if (a.length <= 24) return a; var b = n + ' Kahvesi'; if (b.length <= 24) return b; return n.slice(0, 16).trim() + ' Kahvesi'; }
 var crypto = require('crypto'), fs = require('fs'), path = require('path');
 var Economy = require('./economy.js');
 var C = Economy.CONFIG.venue;
@@ -33,7 +36,7 @@ function starterLayout(inv) {
 }
 function create(p, body) {
   if (mem[p.id]) throw new Error('Zaten bir kıraathanen var.');
-  var name = String(body.name || (p.name + ' Kıraathanesi')).replace(/[<>]/g, '').trim().slice(0, 24); if (name.length < 3) throw new Error('Mekân adı en az 3 karakter olmalı.');
+  var name = String(body.name || defaultVenueName(p.name)).replace(/[<>]/g, '').trim(); if (name.length < 3) throw new Error('Mekân adı en az 3 karakter olmalı.'); if (name.length > 24) throw new Error('Mekân adı en çok 24 karakter olabilir (' + name.length + ' yazdın).');
   var theme = ['koy', 'kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag'].indexOf(body.theme) >= 0 ? body.theme : 'koy';
   var inv = Economy.VENUE_STARTER.map(function (item) { return { iid: iid(), item: item, since: Date.now() }; });
   var v = { ownerId: p.id, ownerName: p.name, code: newCode(), name: name, theme: theme, tier: 1, reputation: C.openGift.reputation, kasa: C.openGift.gold, uncollected: 0, layoutVersion: 1, inventory: inv, placements: [], visibility: 'public', production: { stations: {} }, stats: { visits: 0, matches: 0 }, quests: { firstFriend: false }, host: { day: '', matches: 0, gold: 0, rep: 0, groups: {} }, created: Date.now() };

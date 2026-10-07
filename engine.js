@@ -5,7 +5,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var COLORS = ['Kırmızı', 'Siyah', 'Mavi', 'Sarı'];
+  var COLORS = ['Ateş', 'Yıldız', 'Su', 'Güneş']; // Döngü aileleri (klasik karşılıkları: kırmızı, siyah, mavi, sarı); sunucu ve istemci aynı adları kullanır
   var TASKS = [
     { text: 'Bir adet 3\'lü renkli', req: [['set', 3]] },
     { text: 'Bir adet 3\'lü seri', req: [['run', 3]] },

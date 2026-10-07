@@ -80,7 +80,7 @@ function broadcastState(r, extra) {
 
 // ---- oyun akışı ----
 // ---- Rakibin eline bak / Tokat: haklar, hedef ve süreler sunucuda ----
-var PEEK_MS = 8000, PREP_MS = 15000, MAX_SKINS = 5;
+var PEEK_MS = 8000, PREP_MS = parseInt(process.env.PREP_MS) || 15000, MAX_SKINS = 5; // PREP_MS: el başı hazırlık/hazır olma süresi (test için kısaltılabilir)
 var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 var ALLOW_LOCKED_STAKES = process.env.ALLOW_LOCKED_STAKES === '1'; // Usta / Efsane masaları (100 bin+) bayrakla açılır
 function humanCount(r) { return r.seats.filter(function (s) { return s && !s.bot; }).length; }
@@ -147,8 +147,10 @@ function beginPrep(r) {
   beginHandStats(r);
   r.charges = r.seats.map(function (s) { return s && !s.bot ? Math.min(MAX_SKINS, Math.max(0, parseInt(s.skins) || 0)) : 0; }); // her elde yenilenir, birikmez
   r.peeks = {}; r.prepDone = {};
-  var any = r.charges.some(function (c) { return c > 0; });
-  r.prepUntil = any ? Date.now() + PREP_MS : 0;
+  // Hazırlık/hazır olma aşaması: masada bağlı bir insan varsa her el başında en çok PREP_MS; bütün insanlar "Oyuna geç" deyince (prepDone) erken biter.
+  // (v9.64: önceden yalnız bakış hakkı olan varsa açılıyordu; açıklama penceresi okunurken botlar oynamaya başlıyordu.)
+  var humans = r.seats.some(function (s) { return s && !s.bot && s.ws && s.ws.readyState === 1; });
+  r.prepUntil = humans ? Date.now() + PREP_MS : 0;
 }
 function endPeek(r, from, reason) {
   var p = r.peeks[from]; if (!p) return; clearTimeout(p.timer); clearTimeout(p.botTimer); delete r.peeks[from];
@@ -338,7 +340,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.63. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.64. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
