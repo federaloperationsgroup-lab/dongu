@@ -30,8 +30,9 @@ function ofCode(code) { return byCode[String(code || '').toUpperCase()] || null;
 function starterLayout(inv) {
   var find = function (item, n) { var k = 0; for (var i = 0; i < inv.length; i++) if (inv[i].item === item && k++ === n) return inv[i].iid; return null; };
   return [
-    { iid: find('v_hali', 0), gx: 4, gy: 2, rot: 0 }, { iid: find('v_masa', 0), gx: 5, gy: 2, rot: 0 },
-    { iid: find('v_cayocagi', 0), gx: 0, gy: 0, rot: 0 }, { iid: find('v_sandalye', 0), gx: 10, gy: 1, rot: 0 }, { iid: find('v_sandalye', 1), gx: 11, gy: 1, rot: 0 }
+    // 7 Ekim 2026: başlangıç yerleşimi kapının önünde toplu (masa kapının karşısında, çay ocağı arka duvarda, sandalyeler sağda); eski kayıtlar kendi yerleşimini korur
+    { iid: find('v_hali', 0), gx: 4, gy: 3, rot: 0 }, { iid: find('v_masa', 0), gx: 5, gy: 3, rot: 0 },
+    { iid: find('v_cayocagi', 0), gx: 3, gy: 1, rot: 0 }, { iid: find('v_sandalye', 0), gx: 9, gy: 3, rot: 0 }, { iid: find('v_sandalye', 1), gx: 10, gy: 3, rot: 0 }
   ].filter(function (p) { return p.iid; });
 }
 function create(p, body) {
