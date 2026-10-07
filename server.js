@@ -57,6 +57,7 @@ function viewFor(r, seat) {
     prepLeft: (r.prepUntil && Date.now() < r.prepUntil) ? r.prepUntil - Date.now() : 0, charges: (r.charges || [0, 0, 0, 0])[seat] || 0, freeBak: seatFree(r.seats[seat], 'bak'),
     peeks: Object.keys(r.peeks || {}).map(function (f) { var pk = r.peeks[f], o = { from: rot(parseInt(f)), target: rot(pk.target), left: Math.max(0, pk.until - Date.now()) }; if (parseInt(f) === seat) o.hand = g.players[pk.target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }); return o; }), // süren bakışlar (yeniden bağlanınca animasyon ve tokat düğmesi kalan süreyle geri gelir; taşlar yalnız bakanın kendi görünümünde)
     nextIn: (g.phase === 'handover' && !g.finished && r.nextAt) ? Math.max(0, r.nextAt - Date.now()) : 0, canNext: canStartNext(r, seat),
+    turnLeft: (r.turnUntil && Date.now() < r.turnUntil && g.phase !== 'claim' && g.phase !== 'handover') ? r.turnUntil - Date.now() : 0, turnMs: TURN_MS,
     econ: { humans: humanCount(r), coef: Economy.humanCoef(humanCount(r)), training: humanCount(r) <= 1, stake: r.settings.stake || 'sosyal', entry: r.settings.entry || 0, version: Economy.CONFIG.version }
   };
   for (var i = 0; i < 4; i++) {
@@ -76,12 +77,13 @@ function broadcastRoom(r) {
 }
 function broadcastState(r, extra) {
   if (r.g && r.g.phase === 'handover') scheduleNext(r); // el bitti: geri sayım görünüme girsin
-  r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws) send(s.ws, Object.assign({ t: 'state', view: viewFor(r, i) }, extra || {})); });
+  r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws) { var ex = Object.assign({}, extra || {}); if (ex.actor != null) ex.actor = rotateIdx(ex.actor, i); send(s.ws, Object.assign({ t: 'state', view: viewFor(r, i) }, ex)); } }); // actor alıcıya göre döndürülür (önce ham koltuk gidiyordu: 0 dışındaki koltuklarda "senin" olayları yanlış kişiye yazılıyordu)
 }
 
 // ---- oyun akışı ----
 // ---- Rakibin eline bak / Tokat: haklar, hedef ve süreler sunucuda ----
-var PEEK_MS = 8000, PREP_MS = parseInt(process.env.PREP_MS) || 15000, MAX_SKINS = 5; // PREP_MS: el başı hazırlık/hazır olma süresi (test için kısaltılabilir)
+var PEEK_MS = 8000, PREP_MS = parseInt(process.env.PREP_MS) || 15000, MAX_SKINS = 5;
+var TURN_MS = parseInt(process.env.TURN_MS) || 45000; // hamle süresi (AFK): taş alma ve taş atma için ayrı ayrı 45 sn // PREP_MS: el başı hazırlık/hazır olma süresi (test için kısaltılabilir)
 var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 var ALLOW_LOCKED_STAKES = process.env.ALLOW_LOCKED_STAKES === '1'; // Usta / Efsane masaları (100 bin+) bayrakla açılır
 function humanCount(r) { return r.seats.filter(function (s) { return s && !s.bot; }).length; }
@@ -280,11 +282,11 @@ function nextHand(r) {
 function actorOf(g) { return g.phase === 'claim' ? Okey.claimant(g) : g.cp; }
 function scheduleBots(r) {
   clearTimeout(r.timer); clearTimeout(r.claimTimer);
-  var g = r.g; if (!g || g.phase === 'handover') return;
+  var g = r.g; r.turnUntil = 0; if (!g || g.phase === 'handover') return;
   if (r.prepUntil && Date.now() < r.prepUntil) { r.timer = setTimeout(function () { scheduleBots(r); }, r.prepUntil - Date.now() + 50); return; } // hazırlık aşaması: botlar bekler
   r.prepUntil = 0;
   var a = actorOf(g), s = r.seats[a];
-  if (s.bot || !s.ws || s.ws.readyState !== 1) { // bot ya da bağlantısı kopan oyuncu: sunucu oynar
+  if (s.bot || !s.ws || s.ws.readyState !== 1) { // bot ya da bağlantısı kopan oyuncu: sunucu oynar (AFK sayacı yok)
     r.timer = setTimeout(function () {
       try { Okey.botStep(g); } catch (e) { log(r, 'bot hatası ' + e.message); g.phase = 'play'; }
       if (!s.bot) partOf(r, a).botActs++; // kopuk insan yerine sunucu oynadı: katılım sayacına yazılır
@@ -295,10 +297,25 @@ function scheduleBots(r) {
     return;
   }
   if (g.phase === 'claim') { // insan talep süresi
+    r.turnUntil = 0;
     r.claimTimer = setTimeout(function () {
       if (r.g && r.g.phase === 'claim' && Okey.claimant(r.g) === a) { try { Okey.actClaim(r.g, a, false); } catch (e) {} broadcastState(r, { event: 'claimTimeout', actor: a }); rewardIfOver(r); scheduleBots(r); }
     }, r.settings.claimTime);
+    return;
   }
+  // Hamle süresi (AFK, 8 Ekim 2026): bağlı insan her hamle (taş alma / taş atma) için TURN_MS içinde oynamazsa sunucu onun yerine oynar;
+  // bot hamlesi sayılır (hamlelerinin yarısından fazlası botsa hükmen son — K14 kuralı). Süre her hamleyle yeniden başlar; görünümde turnLeft ile herkese gider.
+  r.turnUntil = Date.now() + TURN_MS;
+  r.seats.forEach(function (x, i) { if (x && !x.bot && x.ws) send(x.ws, { t: 'turn', actor: rotateIdx(a, i), left: TURN_MS, phase: g.phase }); }); // sayaç herkese: kimin sırası, kaç sn (görünüm zaten gönderildi)
+  r.timer = setTimeout(function () {
+    if (!r.g || r.g.phase === 'handover' || actorOf(r.g) !== a || r.g.phase === 'claim') return;
+    try { Okey.botStep(r.g); } catch (e) { log(r, 'AFK hamle hatası ' + e.message); r.g.phase = 'play'; }
+    partOf(r, a).botActs++; r.turnUntil = 0;
+    log(r, s.name + ' süre doldu: sunucu yerine oynadı');
+    broadcastState(r, { event: 'afk', actor: a });
+    rewardIfOver(r);
+    scheduleBots(r);
+  }, TURN_MS);
 }
 function tileById(g, seat, id) { var h = g.players[seat].hand; for (var i = 0; i < h.length; i++) if (h[i].id === id) return h[i]; return null; }
 function handleAct(r, seat, m) {
@@ -361,7 +378,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.70. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.71. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
