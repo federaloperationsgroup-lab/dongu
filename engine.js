@@ -383,7 +383,7 @@
     g.task = TASKS[g.taskOrder[g.currentHandIndex]]; // aktif görev el numarasından değil taskOrder'dan
     g.deck = deck;
     g.players = [];
-    for (var p = 0; p < 4; p++) g.players.push({ hand: deck.splice(0, 14), opened: false, openedThisTurn: false, discards: [] });
+    for (var p = 0; p < 4; p++) g.players.push({ hand: deck.splice(0, 14), opened: false, openedThisTurn: false, discards: [], thrown: {} }); // thrown: bu elde attığı taş kimlikleri (bot al-at döngüsünü keser)
     g.handPen = [0, 0, 0, 0]; // bu eldeki okey kaptırma cezaları
     g.handPenDisc = [0, 0, 0, 0]; // bu eldeki işlek taş atma cezaları
     if (!g.penalties) g.penalties = [0, 0, 0, 0];
@@ -625,9 +625,10 @@
     return { victim: victim, penalty: pen, self: self, message: msg };
   }
 
-  // atılacak taş masaya işlenebiliyor mu? (pere ekleme veya okeyin yerine koyma) — sadece işleme hakkı olan oyuncu için
+  // atılacak taş masaya işlenebiliyor mu? (pere ekleme veya okeyin yerine koyma). Açılmış-açılmamış herkes için geçerli (7 Ekim 2026 kararı);
+  // tek muafiyet: açıldığı turda işleme hakkı olmayan oyuncu. Bitiş taşı için ceza actDiscard'da ayrıca muaf tutulur.
   function discardIsPlayable(g, p, tile) {
-    if (!p.opened || lockedAfterOpen(g, p)) return false;
+    if (p.opened && lockedAfterOpen(g, p)) return false;
     for (var i = 0; i < g.table.length; i++) {
       if (canAddTo(g, i, [tile])) return true;
       if (findSwapJoker(g, i, tile)) return true;
@@ -654,6 +655,8 @@
     }
     removeTile(p.hand, tile);
     p.discards.push(tile);
+    if (!p.thrown) p.thrown = {};
+    p.thrown[tile.id] = 1;
     p.openedThisTurn = false;
     g.lastDiscarder = g.cp;
     g.turnNo++;
@@ -715,7 +718,7 @@
       var s = handScore(rest, ok, p.opened ? null : g.task);
       s += tileValue(t, ok) * 0.05; // yüksek taşı atmayı tercih
       if (isJoker(t, ok)) s -= 100;
-      if (discardIsPlayable(g, p, t)) s -= 40; // işlek taş atma cezasından kaçın
+      if (discardIsPlayable(g, p, t)) s -= (p.opened ? 40 : 15); // işlek taş atma cezasından kaçın (açılmamışken ceza 10 puan: el planını bozmaktan daha ucuz olabilir)
       if (s > bestS) { bestS = s; best = t; }
     }
     return best;
@@ -724,6 +727,7 @@
   function botWantsTile(g, player, tile, outOfTurn) {
     var p = g.players[player];
     var ok = g.ok;
+    if (!outOfTurn && p.thrown && p.thrown[tile.id]) return false; // bu elde kendi attığı taşı yandan geri almaz (al-at döngüsünü keser; alınan taş yığından çıktığı için kalıcı kayıt)
     var before = handScore(p.hand, ok, p.opened ? null : g.task);
     var after = handScore(p.hand.concat([tile]), ok, p.opened ? null : g.task);
     if (p.opened && !outOfTurn) {

@@ -16,6 +16,7 @@ var BOT_AVATARS = { Ali: { bot: 'ali' }, 'Ayşe': { bot: 'ayse' }, Mehmet: { bot
 
 var rooms = {}; // code -> room
 var QUICK_WAIT = parseInt(process.env.QUICK_WAIT) || 20000; // Hızlı Katıl bekleme süresi (ms); dolmazsa botlar oturur
+var PAID_WAIT = parseInt(process.env.PAID_WAIT) || 60000;    // bahisli masa bekleme süresi (ms): dolmazsa en az 2 gerçek oyuncuyla botlar oturur, tek kişiyse iade (5 Ekim 2026 kararı)
 var QUICK_THEMES = ['koy', 'kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag'];
 var ALL_THEMES = QUICK_THEMES.slice(); // istemcinin isteyebileceği mekânlar // hızlı masalar: ücretsiz mekân // hızlı masalarda sunucunun seçtiği mekân havuzu
 
@@ -108,17 +109,28 @@ function venueTables(code) { var out = {}; Object.keys(rooms).forEach(function (
 function venueBroadcast(code, msg, exceptCid) { var lv = live[code]; if (!lv) return; Object.keys(lv.conns).forEach(function (cid) { if (cid !== exceptCid) send(lv.conns[cid].ws, msg); }); }
 function venuePlayers(code) { var lv = live[code]; if (!lv) return []; return Object.keys(lv.conns).map(function (cid) { var c = lv.conns[cid]; return { cid: cid, id: c.acc ? c.acc.id : null, name: c.name, avatar: c.avatar, gx: c.gx, gy: c.gy }; }); }
 function venueLeave(me) { var code = me.venue; if (!code) return; var lv = live[code]; if (lv && lv.conns[me.cid]) { delete lv.conns[me.cid]; venueBroadcast(code, { t: 'vleave', cid: me.cid }); if (!Object.keys(lv.conns).length) delete live[code]; } me.venue = null; }
+function leavePenalty(r, i) { // bahisli maçtan bilerek çıkan: giriş havuzda kalır + giriş kadar ceza cüzdandan havuza (toplam 2×), hükmen son, geri dönemez (5 Ekim 2026 kararı 2)
+  var s = r.seats[i], entry = r.settings.entry || 0; if (!s || !s.acc || !entry) return; s.penalty = 0;
+  Accounts.grant(s.acc, function (p) { var pen = Math.min(entry, Math.max(0, p.coins || 0)); p.coins = (p.coins || 0) - pen; return { pen: pen }; }, function (e, out, view) {
+    if (e) return; s.penalty = out.pen; r.poolExtra = (r.poolExtra || 0) + out.pen;
+    log(r, s.name + ' maçtan çıktı: hükmen son, ceza ' + out.pen + ' havuza eklendi');
+    r.seats.forEach(function (x) { if (x && !x.bot && x.ws && x.ws.readyState === 1 && x !== s) send(x.ws, { t: 'reward', reward: { hand: r.g ? r.g.hand : 0, gold: 0, xp: 0, lines: [s.name + ' maçtan çıktı: hükmen son sıra; girişi ve ' + out.pen + ' altın cezası havuza eklendi.'] }, player: null }); });
+  });
+}
 function settlePool(r) { // maç bitti: havuz (4 × giriş) sıralamaya göre dağıtılır; %5 gider; emanet kapanır
   var g = r.g, entry = r.settings.entry || 0; if (!entry || r.pooled) return; r.pooled = true;
-  var ranks = g.handOver.ranks, pool = Economy.payoutPool(entry, ranks);
+  var ranks = g.handOver.ranks, parts = r.seats.map(function (s) { return !!(s && !s.bot && s.acc); }), forf = r.forfeit || [false, false, false, false];
+  var pool = Economy.payoutPool(entry, ranks, { participants: parts, forfeits: forf, extra: r.poolExtra || 0 });
   r.seats.forEach(function (s, i) {
-    if (!s || s.bot || !s.acc) return;
+    if (!parts[i]) return;
     Accounts.grant(s.acc, function (p) { if (p.escrow) delete p.escrow; p.coins = (p.coins || 0) + pool.shares[i]; return { share: pool.shares[i] }; }, function (e, out, view) {
-      if (e) return; var net = pool.shares[i] - entry;
-      if (s.ws && s.ws.readyState === 1) send(s.ws, { t: 'reward', reward: { hand: g.hand, pool: true, gold: 0, xp: 0, lines: ['Havuz: ' + pool.total + ' altın (gider ' + pool.fee + ') → payın ' + pool.shares[i] + ' altın; giriş ' + entry + ' → net ' + (net >= 0 ? '+' : '') + net] }, player: view });
+      if (e) return; var net = pool.shares[i] - entry - (s.penalty || 0);
+      var line = forf[i] ? 'Hükmen son: havuzdan pay yok; giriş ' + entry + (s.penalty ? ' + ceza ' + s.penalty : '') + ' havuzda kaldı (net −' + (entry + (s.penalty || 0)) + ')' : 'Havuz: ' + pool.total + ' altın (gider ' + pool.fee + (r.poolExtra ? ', cezalar ' + r.poolExtra : '') + ') → payın ' + pool.shares[i] + ' altın; giriş ' + entry + ' → net ' + (net >= 0 ? '+' : '') + net;
+      var msg = { t: 'reward', reward: { hand: g.hand, pool: true, gold: 0, xp: 0, lines: [line] }, player: view };
+      if (s.ws && s.ws.readyState === 1) send(s.ws, msg); else s.pendingReward = msg;
     });
   });
-  log(r, 'havuz dağıtıldı: ' + pool.shares.join('/'));
+  log(r, 'havuz dağıtıldı: ' + pool.shares.join('/') + (r.poolExtra ? ' (cezalar ' + r.poolExtra + ')' : '') + ' hükmen: ' + forf.map(function (f) { return f ? 1 : 0; }).join(''));
 }
 function beginHandStats(r) { // katılım ölçümü (el başına): insan hamlesi, bot devralma hamlesi, kopuk süre
   var now = Date.now();
@@ -170,10 +182,14 @@ function handleSlap(r, seat, m) {
   endPeek(r, from, 'slap');
 }
 // Koltuğa oturan oyuncunun Masa Giriş Skini: yalnızca hesabında sahip olduğu skin herkese gösterilir (hesapsız istemcide skin yok)
-function sanitizeSeat(r, s) {
-  if (!s || !s.avatar || !s.avatar.intro) return;
-  if (!s.acc) { delete s.avatar.intro; return; }
-  Accounts.auth(s.acc, function (e, p) { if (e || !p || !Accounts.ownsIntro(p, s.avatar.intro)) { if (s.avatar) delete s.avatar.intro; broadcastRoom(r); } });
+function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Skini sahipliği ve Çaktırmadan Bak hakkı istemcinin beyanına değil hesaba göre
+  if (!s) return;
+  if (!s.acc) { s.skins = 0; if (s.avatar) delete s.avatar.intro; return; }
+  Accounts.auth(s.acc, function (e, p) {
+    if (e || !p) { s.skins = 0; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
+    s.skins = Accounts.introCount(p);
+    if (s.avatar && s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) { delete s.avatar.intro; broadcastRoom(r); }
+  });
 }
 function accOf(m) { return m.acc && typeof m.acc.id === 'string' && typeof m.acc.token === 'string' ? { id: m.acc.id.slice(0, 40), token: m.acc.token.slice(0, 80) } : null; }
 // el / maç bitince hesaplara ödül yaz (yalnızca hesabı olan gerçek oyuncular); sonucu oyuncuya 'reward' mesajıyla bildir
@@ -185,6 +201,12 @@ function rewardIfOver(r) {
   var now = Date.now(), ho = g.handOver;
   // uygunluk ve katsayı: bu elde uygun insan sayısı (bot koltuğu sayılmaz)
   var elig = r.seats.map(function (s, i) { return seatEligible(r, i, now); });
+  if (!r.actsTot) { r.actsTot = [0, 0, 0, 0]; r.botActsTot = [0, 0, 0, 0]; }
+  r.seats.forEach(function (s, i) { if (!s || s.bot) return; var pt = partOf(r, i); r.actsTot[i] += pt.acts; r.botActsTot[i] += pt.botActs; });
+  if (g.finished) { // hükmen son: bilerek çıktı, maç bittiğinde bağlı değil ya da hamlelerinin yarısından fazlasını bot yaptı (5 Ekim 2026 kararı 1c)
+    if (!r.forfeit) r.forfeit = [false, false, false, false];
+    r.seats.forEach(function (s, i) { if (!s || s.bot) return; if (s.left || !(s.ws && s.ws.readyState === 1) || r.botActsTot[i] > r.actsTot[i]) r.forfeit[i] = true; });
+  }
   var humans = elig.filter(Boolean).length, coef = Economy.humanCoef(humans);
   r.lastHandEcon = { humans: humans, coef: coef, elig: elig.slice() };
   if (!r.elig) { r.elig = [0, 0, 0, 0]; r.factors = [[], [], [], []]; }
@@ -197,7 +219,7 @@ function rewardIfOver(r) {
       var out = Economy.settleHand(p, { ranks: ho.ranks, me: i, humans: humans, won: ho.winner === i }, now);
       r.factors[i].push(out.training ? 0 : out.coef * out.rate);
       var res = { hand: g.hand, gold: out.gold, xp: out.xp, lines: out.lines.slice(), levelUp: out.levelUp, training: out.training, coef: out.coef, rate: out.rate, dayHands: out.dayHands };
-      if (g.finished) { var mb = Economy.settleMatch(p, { totalHands: g.totalHands || 12, eligibleHands: r.elig[i], factors: r.factors[i], rank: ho.ranks[i] }, now); res.matchGold = mb.gold; res.matchXp = mb.xp; res.lines = res.lines.concat(mb.lines); if (mb.levelUp) res.levelUp = mb.levelUp; res.rank = ho.ranks[i]; }
+      if (g.finished) { var ff = !!(r.forfeit && r.forfeit[i]); var mb = Economy.settleMatch(p, { totalHands: g.totalHands || 12, eligibleHands: r.elig[i], factors: r.factors[i], rank: ff ? 4 : ho.ranks[i], forfeit: ff }, now); res.matchGold = mb.gold; res.matchXp = mb.xp; res.lines = res.lines.concat(mb.lines); if (ff) res.lines.push('Hükmen son sıra: maç bonusu yok' + (r.settings.entry ? ', havuzdan pay yok' : '')); if (mb.levelUp) res.levelUp = mb.levelUp; res.rank = ff ? 4 : ho.ranks[i]; }
       return res;
     }, function (e, out, view) { if (e) return; var msg = { t: 'reward', reward: out, player: view }; if (s.ws && s.ws.readyState === 1) send(s.ws, msg); else s.pendingReward = msg; }); // bağlantı o an kopuksa yeniden bağlanınca iletilir
   });
@@ -206,7 +228,7 @@ function startGame(r) {
   fillBots(r);
   r.matchId = r.code + '-' + Date.now().toString(36); // Masa Giriş Skini gösterimi bu kimlikle bir kez (yeniden bağlanma yeni hak vermez)
   r.g = Okey.newGame({ names: r.seats.map(function (s) { return s.name; }), jokerCapturePenalty: r.settings.jokerPenalty, totalHands: r.settings.totalHands });
-  r.elig = null; r.factors = null; r.rewarded = {}; r.matchStart = Date.now(); r.actsAll = [0, 0, 0, 0]; r.pooled = false; // yeni maç: katılım ve ödül kayıtları sıfır
+  r.elig = null; r.factors = null; r.rewarded = {}; r.matchStart = Date.now(); r.actsAll = [0, 0, 0, 0]; r.pooled = false; r.actsTot = null; r.botActsTot = null; r.forfeit = null; r.poolExtra = 0; // yeni maç: katılım ve ödül kayıtları sıfır
   Okey.startHand(r.g);
   beginPrep(r);
   log(r, 'oyun başladı');
@@ -283,12 +305,14 @@ function unrot(meldIdx, seat, g) { return meldIdx; } // per indeksleri döndür�
 // ---- statik dosyalar: oyunun kendisi (public/) aynı adresten sunulur; PWA olarak ana ekrana eklenebilir ----
 var fs = require('fs'), path = require('path');
 var PUBLIC = path.join(__dirname, 'public');
-// public.zip varsa ve public/ yoksa açılışta çıkar (GitHub'a klasör yüklemeden tek dosyayla kurulum)
+// public.zip (oyun) ve assets.zip (büyük görseller) varsa ve public/ yoksa açılışta çıkar (GitHub'a klasör yüklemeden kurulum; GitHub web yüklemesi dosya başına 25 MB sınırı için ikiye bölünmüştür)
 function unzipPublic() {
-  var zipPath = path.join(__dirname, 'public.zip');
-  if (!fs.existsSync(zipPath) || fs.existsSync(path.join(PUBLIC, 'index.html'))) return;
+  if (fs.existsSync(path.join(PUBLIC, 'index.html'))) return;
+  ['public.zip', 'assets.zip'].forEach(function (zname) { var zp = path.join(__dirname, zname); if (fs.existsSync(zp)) unzipInto(zp, zname); });
+}
+function unzipInto(zipPath, zname) {
   var zlib = require('zlib'), buf = fs.readFileSync(zipPath), n = 0;
-  var eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])); if (eocd < 0) { console.log('public.zip okunamadı'); return; }
+  var eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])); if (eocd < 0) { console.log(zname + ' okunamadı'); return; }
   var count = buf.readUInt16LE(eocd + 10), cdOff = buf.readUInt32LE(eocd + 16), p = cdOff;
   for (var i = 0; i < count; i++) {
     if (buf.readUInt32LE(p) !== 0x02014b50) break;
@@ -305,16 +329,16 @@ function unzipPublic() {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, method === 8 ? zlib.inflateRawSync(data) : data); n++;
   }
-  console.log('public.zip açıldı: ' + n + ' dosya');
+  console.log(zname + ' açıldı: ' + n + ' dosya');
 }
-try { unzipPublic(); } catch (e) { console.log('public.zip hatası: ' + e.message); }
+try { unzipPublic(); } catch (e) { console.log('zip açma hatası: ' + e.message); }
 var Venues = require('./venues.js');
 Accounts.init({ publicDir: PUBLIC }, function (e, mode) { console.log('hesap deposu: ' + mode + (e ? ' (' + e.message + ')' : '')); Accounts.releaseEscrows(function (n) { if (n) console.log('yarım kalan emanet iade edildi: ' + n); }); Venues.init({ accounts: Accounts, db: Accounts.db() }, function (e2) { console.log('kıraathane deposu hazır' + (e2 ? ' (' + e2.message + ')' : '')); }); });
 Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.61. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.63. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
@@ -365,7 +389,7 @@ function handle(ws, me, m) {
     var seatQuick = function () {
       if (ws.readyState !== 1) { if (entry) refundEscrow(qs, 'bağlantı kapandı'); return; }
       r = null; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (!r && q.quick && !q.g && q.settings.totalHands === th && (q.settings.stake || 'sosyal') === stake.id && (!wantTheme || q.settings.theme === wantTheme) && freeSeat(q) >= 0) r = q; });
-      if (!r) { r = newRoom(); r.quick = true; r.host = null; r.settings.totalHands = th; r.settings.stake = stake.id; r.settings.entry = entry; r.settings.theme = wantTheme || QUICK_THEMES[Math.floor(Math.random() * QUICK_THEMES.length)]; r.quickUntil = Date.now() + QUICK_WAIT; r.quickTimer = setTimeout(function () { if (r.g) return; if (entry) { cancelPaidRoom(r, 'Masa ' + Math.round(QUICK_WAIT / 1000) + ' sn içinde 4 oyuncuya dolmadı; girişler iade edildi.'); return; } if (r.seats.some(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; })) startGame(r); }, QUICK_WAIT); log(r, 'hızlı masa açıldı (' + th + ' el, ' + stake.name + ')'); }
+      if (!r) { r = newRoom(); r.quick = true; r.host = null; r.settings.totalHands = th; r.settings.stake = stake.id; r.settings.entry = entry; r.settings.theme = wantTheme || QUICK_THEMES[Math.floor(Math.random() * QUICK_THEMES.length)]; var waitMs = entry ? PAID_WAIT : QUICK_WAIT; r.quickUntil = Date.now() + waitMs; r.quickTimer = setTimeout(function () { if (r.g) return; var live = r.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length; if (entry) { if (live < 2) { cancelPaidRoom(r, 'Masa ' + Math.round(PAID_WAIT / 1000) + ' sn içinde en az 2 gerçek oyuncuya ulaşmadı; girişler iade edildi.'); return; } r.seats.forEach(function (x, i) { if (x && !x.bot && !(x.ws && x.ws.readyState === 1)) { refundEscrow(x, 'bağlantı kapandı'); r.seats[i] = null; } }); startGame(r); return; } if (live) startGame(r); }, waitMs); log(r, 'hızlı masa açıldı (' + th + ' el, ' + stake.name + ')'); }
       var qi = freeSeat(r); r.seats[qi] = qs; me.room = r; me.seat = qi; sanitizeSeat(r, qs);
       send(ws, { t: 'joined', code: r.code, seat: qi, token: qs.token, stake: stake.id, entry: entry });
       broadcastRoom(r); log(r, qs.name + ' hızlı katıldı' + (entry ? ' (giriş ' + entry + ')' : ''));
@@ -393,7 +417,8 @@ function handle(ws, me, m) {
     // yeniden bağlanma
     var back = -1;
     if (m.token) r.seats.forEach(function (s, i) { if (s && s.token === m.token) back = i; });
-    if (back >= 0) { r.seats[back].ws = ws; me.room = r; me.seat = back; if (r.g && r.part) { var pb = partOf(r, back); if (pb.discAt) { pb.discMs += Date.now() - pb.discAt; pb.discAt = 0; } } send(ws, { t: 'joined', code: r.code, seat: back, token: m.token }); broadcastRoom(r); if (r.g) { send(ws, { t: 'state', view: viewFor(r, back), event: 'resync' }); scheduleBots(r); } if (r.seats[back].pendingReward) { send(ws, r.seats[back].pendingReward); r.seats[back].pendingReward = null; } return; }
+    if (back >= 0 && r.seats[back].left && r.settings.entry && r.g && !r.g.finished) throw new Error('Bu maçtan çıktın; bahisli masaya geri dönülemez.');
+    if (back >= 0) { r.seats[back].ws = ws; r.seats[back].left = false; me.room = r; me.seat = back; if (r.g && r.part) { var pb = partOf(r, back); if (pb.discAt) { pb.discMs += Date.now() - pb.discAt; pb.discAt = 0; } } send(ws, { t: 'joined', code: r.code, seat: back, token: m.token }); broadcastRoom(r); if (r.g) { send(ws, { t: 'state', view: viewFor(r, back), event: 'resync' }); scheduleBots(r); } if (r.seats[back].pendingReward) { send(ws, r.seats[back].pendingReward); r.seats[back].pendingReward = null; } return; }
     if (r.g) throw new Error('Bu masada oyun başlamış.');
     var i = freeSeat(r); if (i < 0) throw new Error('Masa dolu.');
     var s = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws, acc: accOf(m) };
@@ -430,7 +455,7 @@ function handle(ws, me, m) {
     return;
   }
   r = me.room; if (!r) throw new Error('önce odaya katıl');
-  if (m.t === 'leave') { var ls = r.seats[me.seat]; if (!r.g && ls && ls.escrow) refundEscrow(ls, 'masadan ayrıldı'); r.seats[me.seat] = r.g ? r.seats[me.seat] : null; if (r.g) { r.seats[me.seat].ws = null; if (r.part) { var pl = partOf(r, me.seat); if (!pl.discAt) pl.discAt = Date.now(); } } me.room = null; broadcastRoom(r); if (r.quick && !r.g && !r.seats.some(function (x) { return x && !x.bot; })) { clearTimeout(r.quickTimer); delete rooms[r.code]; } return; }
+  if (m.t === 'leave') { var ls = r.seats[me.seat]; if (!r.g && ls && ls.escrow) refundEscrow(ls, 'masadan ayrıldı'); r.seats[me.seat] = r.g ? r.seats[me.seat] : null; if (r.g) { ls.ws = null; if (r.part) { var pl = partOf(r, me.seat); if (!pl.discAt) pl.discAt = Date.now(); } if (!r.g.finished) { ls.left = true; if (!r.forfeit) r.forfeit = [false, false, false, false]; r.forfeit[me.seat] = true; if (r.settings.entry && ls.acc && !ls.penalty) leavePenalty(r, me.seat); } } me.room = null; broadcastRoom(r); if (r.quick && !r.g && !r.seats.some(function (x) { return x && !x.bot; })) { clearTimeout(r.quickTimer); delete rooms[r.code]; } return; }
   if (m.t === 'start') { if (me.seat !== r.host) throw new Error('Oyunu yalnızca oda sahibi başlatır.'); if (r.g) throw new Error('zaten başladı'); startGame(r); return; }
   if (m.t === 'next') { if (!canStartNext(r, me.seat)) throw new Error('Sonraki eli oda sahibi başlatır.'); nextHand(r); return; }
   if (m.t === 'act') {

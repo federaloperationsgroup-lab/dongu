@@ -12,7 +12,9 @@ Tarayıcıda sunucunun adresini açınca oyun gelir; "Çevrim içi oda" ekranın
 Telefonda "Ana ekrana ekle" ile tam ekran (yatay) uygulama gibi açılır.
 
 Dosyalar: server.js (oda/maç/kıraathane sunucusu), engine.js (kurallar), economy.js (ekonomi ayarları ve formüller; istemciyle ortak),
-accounts.js (hesaplar: dosya ya da Postgres), venues.js (kıraathaneler: dosya ya da Postgres), public.zip (oyun; açılışta public/ klasörüne açılır).
+accounts.js (hesaplar: dosya ya da Postgres), venues.js (kıraathaneler: dosya ya da Postgres), public.zip (oyun; açılışta public/ klasörüne açılır),
+assets.zip (kıraathane görselleri: public/assets/k; açılışta aynı klasöre açılır). İki zip de GitHub web yüklemesinin 25 MB sınırının altındadır.
 
 Ortam değişkenleri: PORT, DATABASE_URL (Postgres; yoksa data/*.json dosyaları), QUICK_WAIT (hızlı masa bekleme ms),
-ALLOW_LOCKED_STAKES=1 (Usta/Efsane masalarını açar), BOT_DELAY, NEXT_DELAY, RESULT_GAP_MS (geliştirme/test).
+PAID_WAIT (bahisli masada 2+ insan varken bot doldurma süresi ms, varsayılan 60000), ALLOW_LOCKED_STAKES=1 (Usta/Efsane masalarını açar),
+BOT_DELAY, NEXT_DELAY, RESULT_GAP_MS (geliştirme/test).

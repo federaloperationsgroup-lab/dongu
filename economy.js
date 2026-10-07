@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    version: 'dongu-economy-1.2.1',         // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları (5 Ekim 2026 görsel paketi)
+    version: 'dongu-economy-1.3',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -259,7 +259,7 @@
   function settleMatch(p, opts, now) { // {totalHands, eligibleHands, factors:[coef*rate...], rank, won}
     var e = econOf(p, now), lines = [], b = CONFIG.matchBonus[opts.totalHands];
     var out = { gold: 0, xp: 0, lines: lines, levelUp: null };
-    if (b && opts.eligibleHands >= opts.totalHands && opts.factors && opts.factors.length) {
+    if (b && !opts.forfeit && opts.eligibleHands >= opts.totalHands && opts.factors && opts.factors.length) {
       var f = opts.factors.reduce(function (s, x) { return s + x; }, 0) / opts.factors.length;
       out.gold = Math.floor(b.gold * f); out.xp = Math.floor(b.xp * f);
       p.coins = (p.coins || 0) + out.gold; p.xp = (p.xp || 0) + out.xp;
@@ -288,21 +288,25 @@
   // ---------- giriş altınlı masa havuzu ----------
   function stakeOf(id) { for (var i = 0; i < CONFIG.stakes.length; i++) if (CONFIG.stakes[i].id === id) return CONFIG.stakes[i]; return CONFIG.stakes[0]; }
   // entries: 4 giriş tutarı (eşit), ranks: [1..4] (eşitlikte aynı sayı) → ödemeler (toplam = havuz − gider)
-  function payoutPool(entry, ranks) {
-    var total = entry * ranks.length, fee = Math.floor(total * CONFIG.stakeFeeBps / 10000), net = total - fee;
-    var shares = [0, 0, 0, 0], bps = CONFIG.stakePayoutBps;
-    // bağlı konumların bps'leri birleştirilip eşit bölünür
-    var groups = {}; ranks.forEach(function (r, i) { (groups[r] = groups[r] || []).push(i); });
-    var paid = 0, order = Object.keys(groups).map(Number).sort(function (a, b) { return a - b; }), pos = 0;
+  // Havuz dağıtımı. opts: { participants: [bool×4] girişi havuza giren koltuklar (botlar değil), forfeits: [bool×4] hükmen son (pay alamaz, girişi havuzda kalır), extra: cezalarla havuza eklenen altın }
+  // Sıralama yalnız pay alabilen katılımcılar arasında; hükmen sonlar en sona. Dolmayan konumların payı 1. sıraya eklenir (havuzda altın kalmaz). Kimse alamıyorsa havuz dağıtılmaz.
+  function payoutPool(entry, ranks, opts) {
+    opts = opts || {}; var parts = opts.participants || ranks.map(function () { return true; }), forf = opts.forfeits || ranks.map(function () { return false; });
+    var n = parts.filter(Boolean).length, total = entry * n + (opts.extra || 0), fee = Math.floor(total * CONFIG.stakeFeeBps / 10000), net = total - fee;
+    var shares = [0, 0, 0, 0], bps = CONFIG.stakePayoutBps, paid = 0;
+    var elig = []; ranks.forEach(function (r, i) { if (parts[i] && !forf[i]) elig.push(i); });
+    if (!elig.length) return { total: total, fee: fee, net: net, shares: shares, undistributed: net };
+    var groups = {}; elig.forEach(function (i) { (groups[ranks[i]] = groups[ranks[i]] || []).push(i); });
+    var order = Object.keys(groups).map(Number).sort(function (a, b) { return a - b; }), pos = 0, usedBps = 0;
     order.forEach(function (r) {
       var members = groups[r], sumBps = 0; for (var k = 0; k < members.length; k++) sumBps += bps[Math.min(3, pos + k)] || 0;
-      pos += members.length;
+      pos += members.length; usedBps += sumBps;
       var amount = Math.floor(net * sumBps / 10000), each = Math.floor(amount / members.length), rem = amount - each * members.length;
       members.forEach(function (i, j) { shares[i] = each + (j < rem ? 1 : 0); paid += shares[i]; });
     });
-    // yuvarlama kalanı en iyi sıraya (deterministik)
+    // dolmayan konumlar (örn. 2 katılımcıdan biri hükmen son) ve yuvarlama kalanı en iyi sıraya
     var leftover = net - paid; if (leftover > 0) { var top = groups[order[0]]; shares[top[0]] += leftover; }
-    return { total: total, fee: fee, net: net, shares: shares };
+    return { total: total, fee: fee, net: net, shares: shares, undistributed: 0 };
   }
 
   return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps };
