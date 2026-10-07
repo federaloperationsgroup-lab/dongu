@@ -190,7 +190,7 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   Accounts.auth(s.acc, function (e, p) {
     if (e || !p) { s.skins = 0; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
     s.skins = Accounts.introCount(p);
-    if (s.avatar && s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) { delete s.avatar.intro; broadcastRoom(r); }
+    if (s.avatar) { var before = JSON.stringify(s.avatar); s.avatar = Accounts.cleanCosmetics(p, Accounts.cleanAvatar(s.avatar)); if (s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) delete s.avatar.intro; if (JSON.stringify(s.avatar) !== before) broadcastRoom(r); } // masadaki görünüm hesaptaki sahipliğe göre (ücretli kozmetik + Masa Giriş Skini)
   });
 }
 function accOf(m) { return m.acc && typeof m.acc.id === 'string' && typeof m.acc.token === 'string' ? { id: m.acc.id.slice(0, 40), token: m.acc.token.slice(0, 80) } : null; }
@@ -340,7 +340,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.68. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.69. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
@@ -433,9 +433,11 @@ function handle(ws, me, m) {
     var vv = Venues.ofCode(m.code); if (!vv) throw new Error('Kıraathane bulunamadı.');
     venueLeave(me); me.venue = vv.code; me.cid = me.cid || ('c' + (cidSeq++));
     var lv = live[vv.code] || (live[vv.code] = { conns: {} });
-    var G = Economy.VENUE_GRID; lv.conns[me.cid] = { ws: ws, acc: accOf(m), name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, gx: G.doorCols[0], gy: G.rows - 1, at: 0 };
+    var G = Economy.VENUE_GRID; lv.conns[me.cid] = { ws: ws, acc: accOf(m), name: (m.name || 'Oyuncu').slice(0, 14), avatar: Accounts.cleanAvatar(m.avatar) || null, gx: G.doorCols[0], gy: G.rows - 1, at: 0 };
     send(ws, { t: 'vstate', code: vv.code, you: me.cid, players: venuePlayers(vv.code), tables: venueTables(vv.code) });
     venueBroadcast(vv.code, { t: 'vjoin', player: venuePlayers(vv.code).filter(function (x) { return x.cid === me.cid; })[0] }, me.cid);
+    // kıraathanedeki görünüm de hesaptaki sahipliğe göre (ücretli kozmetik beyana göre giyilemez)
+    (function (code, cid, acc) { if (!acc) return; Accounts.auth(acc, function (e, p) { var c = live[code] && live[code].conns[cid]; if (e || !p || !c || !c.avatar) return; var before = JSON.stringify(c.avatar); c.avatar = Accounts.cleanCosmetics(p, c.avatar); if (JSON.stringify(c.avatar) !== before) venueBroadcast(code, { t: 'vjoin', player: venuePlayers(code).filter(function (x) { return x.cid === cid; })[0] }, null); }); })(vv.code, me.cid, accOf(m));
     return;
   }
   if (m.t === 'vmove') { var lvm = me.venue && live[me.venue]; var cm = lvm && lvm.conns[me.cid]; if (!cm) return; var tnow = Date.now(); if (tnow - cm.at < 80) return; cm.at = tnow; cm.gx = m.gx | 0; cm.gy = m.gy | 0; venueBroadcast(me.venue, { t: 'vmove', cid: me.cid, gx: cm.gx, gy: cm.gy }, me.cid); return; }
