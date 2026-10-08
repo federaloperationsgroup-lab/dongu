@@ -11,10 +11,19 @@ var C = Economy.CONFIG.venue;
 var DB = null, mem = {}, byCode = {}, FILE = path.join(__dirname, 'data', 'venues.json'), saveTimer = null, Accounts = null;
 function init(opts, cb) {
   Accounts = opts.accounts; DB = opts.db || null;
-  if (DB) { DB.query('CREATE TABLE IF NOT EXISTS venues (id TEXT PRIMARY KEY, code TEXT, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())').then(function () { return DB.query('SELECT data FROM venues'); }).then(function (r) { r.rows.forEach(function (row) { mem[row.data.ownerId] = row.data; byCode[row.data.code] = row.data; }); cb && cb(null); }).catch(function (e) { DB = null; fileLoad(); cb && cb(e); }); return; }
-  fileLoad(); cb && cb(null);
+  if (DB) { DB.query('CREATE TABLE IF NOT EXISTS venues (id TEXT PRIMARY KEY, code TEXT, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())').then(function () { return DB.query('SELECT data FROM venues'); }).then(function (r) { r.rows.forEach(function (row) { mem[row.data.ownerId] = row.data; byCode[row.data.code] = row.data; }); fixAllNames(); cb && cb(null); }).catch(function (e) { DB = null; fileLoad(); fixAllNames(); cb && cb(e); }); return; }
+  fileLoad(); fixAllNames(); cb && cb(null);
 }
 function fileLoad() { try { mem = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { mem = {}; } Object.keys(mem).forEach(function (k) { byCode[mem[k].code] = mem[k]; }); }
+// K26 öncesi varsayılan ad 24 karakterde sessizce kesiliyordu ("Misafir 8762 Kıraathanes"): böyle bir kayıt bir kez düzeltilir ('<ad> Kahvesi' kuralıyla).
+var NAME_SUFFIX = ' Kıraathanesi';
+function fixLegacyName(v) {
+  if (!v || v.nameFixed) return false;
+  var n = String(v.name || ''); if (n.length !== 24) return false;
+  for (var k = NAME_SUFFIX.length - 1; k >= 3; k--) { if (n.slice(-k) === NAME_SUFFIX.slice(0, k)) { var base = n.slice(0, 24 - k).trim(); if (base.length >= 2) { v.name = defaultVenueName(base); v.nameFixed = true; put(v); return true; } } }
+  return false;
+}
+function fixAllNames() { Object.keys(mem).forEach(function (k) { fixLegacyName(mem[k]); }); }
 function flush() { saveTimer = null; try { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(mem)); } catch (e) {} }
 function put(v) {
   v.updated = Date.now(); mem[v.ownerId] = v; byCode[v.code] = v;
@@ -48,13 +57,18 @@ function migrateGrid(v) {
 }
 function create(p, body) {
   if (mem[p.id]) throw new Error('Zaten bir kıraathanen var.');
-  var name = String(body.name || defaultVenueName(p.name)).replace(/[<>]/g, '').trim(); if (name.length < 3) throw new Error('Mekân adı en az 3 karakter olmalı.'); if (name.length > 24) throw new Error('Mekân adı en çok 24 karakter olabilir (' + name.length + ' yazdın).');
+  var name = cleanName(body.name || defaultVenueName(p.name));
   var theme = ['koy', 'kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag'].indexOf(body.theme) >= 0 ? body.theme : 'koy';
   var inv = Economy.VENUE_STARTER.map(function (item) { return { iid: iid(), item: item, since: Date.now() }; });
   var v = { ownerId: p.id, ownerName: p.name, code: newCode(), name: name, theme: theme, tier: 1, reputation: C.openGift.reputation, kasa: C.openGift.gold, uncollected: 0, layoutVersion: 1, inventory: inv, placements: [], visibility: 'public', production: { stations: {} }, stats: { visits: 0, matches: 0 }, quests: { firstFriend: false }, host: { day: '', matches: 0, gold: 0, rep: 0, groups: {} }, created: Date.now() };
   v.placements = starterLayout(inv); v.gridVersion = Economy.VENUE_GRID.version;
   syncStations(v);
   put(v); return v;
+}
+function cleanName(raw) { var name = String(raw || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim(); if (name.length < 3) throw new Error('Mekân adı en az 3 karakter olmalı.'); if (name.length > 24) throw new Error('Mekân adı en çok 24 karakter olabilir (' + name.length + ' yazdın).'); return name; }
+function rename(v, body) { // sahibi mekân adını değiştirir (ücretsiz; aynı kurallar: 3–24 karakter)
+  var name = cleanName(body.name); if (name === v.name) throw new Error('Ad zaten bu.');
+  v.name = name; v.nameFixed = true; put(v); return v;
 }
 function syncStations(v) { // yerleştirilmiş üretim istasyonları için üretim kaydı
   var st = v.production.stations || (v.production.stations = {});
@@ -161,6 +175,7 @@ function handleHttp(url, body, cb) {
         case 'produce': if (!v) throw new Error('Kıraathanen yok.'); produce(v, body, now); out = { venue: ownerView(v, now) }; break;
         case 'collect': if (!v) throw new Error('Kıraathanen yok.'); var amt = collect(v, now); out = { venue: ownerView(v, now), collected: amt }; break;
         case 'migrated-seen': if (!v) throw new Error('Kıraathanen yok.'); if (v.migrated) { v.migrated.seen = true; put(v); } out = { venue: ownerView(v, now) }; break; // oda ölçeği dönüşüm bildirimi bir kez gösterilir
+        case 'rename': if (!v) throw new Error('Kıraathanen yok.'); rename(v, body); out = { venue: ownerView(v, now) }; break;
         case 'order': var tv = ofCode(body.code); if (!tv) throw new Error('Kıraathane bulunamadı.'); out = { order: serviceOrder(tv, p, body, now), venue: guestView(tv, now) }; break;
         default: throw new Error('bilinmeyen işlem');
       }
@@ -170,4 +185,4 @@ function handleHttp(url, body, cb) {
   });
   return true;
 }
-module.exports = { init: init, handleHttp: handleHttp, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put };
+module.exports = { init: init, handleHttp: handleHttp, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };
