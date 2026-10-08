@@ -83,7 +83,7 @@ function broadcastState(r, extra) {
 // ---- oyun akışı ----
 // ---- Rakibin eline bak / Tokat: haklar, hedef ve süreler sunucuda ----
 var PEEK_MS = 8000, PREP_MS = parseInt(process.env.PREP_MS) || 15000, MAX_SKINS = 5;
-var TURN_MS = parseInt(process.env.TURN_MS) || 45000; var DISC_GRACE_MS = parseInt(process.env.DISC_GRACE_MS) || 10000; // bağlantısı kopan (çıkmamış) insanın sırası: 10 sn tolerans (sayfa yenileme hamleyi kaybettirmesin), sonra sunucu oynar // hamle süresi (AFK): taş alma ve taş atma için ayrı ayrı 45 sn // PREP_MS: el başı hazırlık/hazır olma süresi (test için kısaltılabilir)
+var TURN_MS = parseInt(process.env.TURN_MS) || 30000; var DISC_GRACE_MS = parseInt(process.env.DISC_GRACE_MS) || 10000; // bağlantısı kopan (çıkmamış) insanın sırası: 10 sn tolerans (sayfa yenileme hamleyi kaybettirmesin), sonra sunucu oynar // hamle süresi (AFK): taş alma ve taş atma için ayrı ayrı 30 sn (v9.73; önce 45) // PREP_MS: el başı hazırlık/hazır olma süresi (test için kısaltılabilir)
 var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 var ALLOW_LOCKED_STAKES = process.env.ALLOW_LOCKED_STAKES === '1'; // Usta / Efsane masaları (100 bin+) bayrakla açılır
 function humanCount(r) { return r.seats.filter(function (s) { return s && !s.bot; }).length; }
@@ -380,7 +380,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.72. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.73. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
@@ -397,15 +397,20 @@ var server = http.createServer(function (req, res) {
   });
 });
 var wss = new WebSocketServer({ server: server });
+// v9.73: canlı tutma — 30 sn'de bir ping; cevap vermeyen bağlantı bir sonraki turda kapatılır (boşta kalan soketi aracı sunucular kesiyordu; istemci de 25 sn'de bir ping yollar)
+setInterval(function () { wss.clients.forEach(function (ws) { if (ws.isAlive === false) { try { ws.terminate(); } catch (e) {} return; } ws.isAlive = false; try { ws.ping(); } catch (e) {} }); }, 30000);
 wss.on('connection', function (ws) {
-  var me = { room: null, seat: -1 }; ws._me = me;
+  var me = { room: null, seat: -1 }; ws._me = me; ws.isAlive = true;
+  ws.on('pong', function () { ws.isAlive = true; });
   ws.on('message', function (data) {
+    ws.isAlive = true;
     var m; try { m = JSON.parse(data); } catch (e) { return; }
     try { handle(ws, me, m); } catch (e) { send(ws, { t: 'error', msg: e.message }); }
   });
-  ws.on('close', function () {
+  ws.on('close', function (code, reason) {
     venueLeave(me);
     var r = me.room; if (!r || me.seat < 0) return;
+    var sc = r.seats[me.seat]; log(r, (sc ? sc.name : '?') + ' bağlantı kapandı (kod ' + code + (reason && reason.length ? ', ' + String(reason).slice(0, 60) : '') + (sc && sc.ws === ws ? '' : ', eski bağlantı') + ')'); // v9.73: kopma nedeni log'da
     var s = r.seats[me.seat]; if (s && s.ws === ws) { s.ws = null; if (r.g && r.part) { var pt = partOf(r, me.seat); if (!pt.discAt) pt.discAt = Date.now(); } if (!r.g && s.escrow) { refundEscrow(s, 'bağlantı koptu'); r.seats[me.seat] = null; } }
     broadcastRoom(r);
     if (r.g) scheduleBots(r); // kopan oyuncunun yerine sunucu oynar
@@ -504,6 +509,14 @@ function handle(ws, me, m) {
   }
   r = me.room; if (!r) throw new Error('önce odaya katıl');
   if (m.t === 'leave') { var ls = r.seats[me.seat]; if (!r.g && ls && ls.escrow) refundEscrow(ls, 'masadan ayrıldı'); r.seats[me.seat] = r.g ? r.seats[me.seat] : null; if (r.g) { ls.ws = null; if (r.part) { var pl = partOf(r, me.seat); if (!pl.discAt) pl.discAt = Date.now(); } if (!r.g.finished) { ls.left = true; if (!r.forfeit) r.forfeit = [false, false, false, false]; r.forfeit[me.seat] = true; if (r.settings.entry && ls.acc && !ls.penalty) leavePenalty(r, me.seat); } } me.room = null; broadcastRoom(r); if (r.g) scheduleBots(r); if (r.quick && !r.g && !r.seats.some(function (x) { return x && !x.bot; })) { clearTimeout(r.quickTimer); delete rooms[r.code]; } return; } // çıkan oyuncunun sırasıysa sunucu hemen devralır (önce AFK süresine kadar bekliyordu)
+  if (m.t === 'avatar') { // v9.73: görünüm maç içinde değişince koltuğa yansır (Masa Giriş Skini değişmez; ücretli parçalar hesaptaki sahipliğe göre)
+    var sa = r.seats[me.seat]; if (!sa || sa.bot) return;
+    var av = Accounts.cleanAvatar(m.avatar); if (!av) return;
+    var keepIntro = sa.avatar ? sa.avatar.intro : undefined; delete av.intro; if (keepIntro) av.intro = keepIntro;
+    if (!sa.acc) { sa.avatar = av; broadcastRoom(r); return; }
+    Accounts.auth(sa.acc, function (e, p) { if (e || !p || r.seats[me.seat] !== sa) return; sa.avatar = Accounts.cleanCosmetics(p, av); if (keepIntro) sa.avatar.intro = keepIntro; broadcastRoom(r); log(r, sa.name + ' görünümünü değiştirdi'); });
+    return;
+  }
   if (m.t === 'start') { if (me.seat !== r.host) throw new Error('Oyunu yalnızca oda sahibi başlatır.'); if (r.g) throw new Error('zaten başladı'); startGame(r); return; }
   if (m.t === 'next') { if (!canStartNext(r, me.seat)) throw new Error('Sonraki eli oda sahibi başlatır.'); nextHand(r); return; }
   if (m.t === 'act') {
@@ -524,6 +537,7 @@ function handle(ws, me, m) {
     return;
   }
   if (m.t === 'ping') { send(ws, { t: 'pong' }); return; }
+  if (m.t === 'state') { if (r.g) send(ws, { t: 'state', view: viewFor(r, me.seat), event: 'resync' }); else broadcastRoom(r); return; } // uygulama öne gelince taze durum (v9.73)
 }
 // boş odaları temizle
 setInterval(function () { var now = Date.now(); Object.keys(rooms).forEach(function (c) { var r = rooms[c]; var alive = r.seats.some(function (s) { return s && !s.bot && s.ws && s.ws.readyState === 1; }); if (!alive && now - r.created > 30 * 60 * 1000) { clearTimeout(r.timer); delete rooms[c]; } }); }, 60000);
