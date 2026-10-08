@@ -22,6 +22,7 @@ function init(opts, cb) {
     try { Pool = require('pg').Pool; } catch (e) { return fileMode(cb, 'pg paketi yok'); }
     DB = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 5 });
     DB.query('CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())')
+      .then(function () { return DB.query('CREATE TABLE IF NOT EXISTS match_log (id SERIAL PRIMARY KEY, at TIMESTAMPTZ DEFAULT now(), data JSONB NOT NULL)'); }) // v9.76 ölçüm: el/maç kayıtları
       .then(function () { mode = 'postgres'; cb(null, mode); })
       .catch(function (e) { DB = null; fileMode(cb, e.message); });
   } else fileMode(cb, null);
@@ -172,6 +173,41 @@ function handleHttp(req, res, url) {
   });
   return true;
 }
+// ---- Maç kaydı (v9.76 ölçüm): el başına ve maç başına bir satır; dosya modunda data/matches.jsonl, Postgres'te match_log. Kişisel veri yok (hesap kimliği yazılmaz). ----
+var MLOG = path.join(__dirname, 'data', 'matches.jsonl'), mcount = { hands: 0, matches: 0 }, mcountReady = false;
+function logMatch(rec, cb) {
+  rec.at = new Date().toISOString();
+  if (rec.k === 'hand') mcount.hands++; else if (rec.k === 'match') mcount.matches++;
+  if (DB) { DB.query('INSERT INTO match_log (data) VALUES ($1)', [JSON.stringify(rec)]).then(function () { cb && cb(null); }).catch(function (e) { cb && cb(e); }); return; }
+  try { fs.mkdirSync(path.dirname(MLOG), { recursive: true }); fs.appendFile(MLOG, JSON.stringify(rec) + '\n', function (e) { cb && cb(e || null); }); } catch (e) { cb && cb(e); }
+}
+function matchCounts(cb) { // /durum için: el ve maç sayısı
+  if (mcountReady) { cb(mcount); return; }
+  var fin = function () { mcountReady = true; cb(mcount); };
+  if (DB) { DB.query("SELECT count(*) FILTER (WHERE data->>'k' = 'hand')::int AS h, count(*) FILTER (WHERE data->>'k' = 'match')::int AS m FROM match_log").then(function (r) { mcount = { hands: r.rows[0].h, matches: r.rows[0].m }; fin(); }).catch(function () { fin(); }); return; }
+  try { var lines = fs.readFileSync(MLOG, 'utf8').split('\n'); var h = 0, m = 0; lines.forEach(function (l) { if (l.indexOf('"k":"hand"') >= 0) h++; else if (l.indexOf('"k":"match"') >= 0) m++; }); mcount = { hands: h, matches: m }; } catch (e) {}
+  fin();
+}
+function matchRecords(limit, cb) { // son kayıtlar (özet için); en çok limit satır
+  if (DB) { DB.query('SELECT data FROM match_log ORDER BY id DESC LIMIT $1', [limit]).then(function (r) { cb(null, r.rows.map(function (x) { return typeof x.data === 'string' ? JSON.parse(x.data) : x.data; })); }).catch(function (e) { cb(e, []); }); return; }
+  try { var lines = fs.readFileSync(MLOG, 'utf8').trim().split('\n'); var out = []; for (var i = lines.length - 1; i >= 0 && out.length < limit; i--) { try { out.push(JSON.parse(lines[i])); } catch (e) {} } cb(null, out); } catch (e) { cb(null, []); }
+}
+function matchSummary(cb) { // /olcum: görev başına açılma, el uzunluğu, bitiş türleri, çarpanlar; maç tamamlama ve rövanş oranı
+  matchRecords(5000, function (e, recs) {
+    var byTask = {}, tot = { hands: 0, matches: 0, matchesFinished: 0, rematches: 0, humansHands: 0, leftHands: 0, afkHands: 0 };
+    recs.forEach(function (r) {
+      if (r.k === 'match') { tot.matches++; if (r.finished) tot.matchesFinished++; if (r.rematch) tot.rematches++; return; }
+      if (r.k !== 'hand') return; tot.hands++;
+      var t = byTask[r.task] || (byTask[r.task] = { hands: 0, openedN: 0, openRound: 0, openRoundN: 0, turns: 0, secs: 0, finish: {}, mult2: 0, mult4: 0, deckOut: 0 });
+      t.hands++; t.openedN += r.openedN || 0; (r.openRounds || []).forEach(function (x) { t.openRound += x; t.openRoundN++; }); t.turns += r.turns || 0; t.secs += r.secs || 0;
+      var f = (r.finish || '').split(' — ').pop().replace(/\s*\(.*$/, ''); /* "Mehmet bitirdi — Normal bitiş" → "Normal bitiş" */ t.finish[f] = (t.finish[f] || 0) + 1; if (r.mult === 2) t.mult2++; if (r.mult === 4) t.mult4++; if (r.winnerSeat == null) t.deckOut++;
+      if (r.humans >= 2) tot.humansHands++; if (r.leftN) tot.leftHands++; if (r.afkActs) tot.afkHands++;
+    });
+    var out = { toplam: tot, gorevler: {} };
+    Object.keys(byTask).forEach(function (k) { var t = byTask[k]; out.gorevler[k] = { el: t.hands, acilanOyuncuOrt: +(t.openedN / t.hands).toFixed(2), acilmaDevriOrt: t.openRoundN ? +(t.openRound / t.openRoundN).toFixed(1) : null, elTurOrt: +(t.turns / t.hands).toFixed(1), elSnOrt: Math.round(t.secs / t.hands), x2: t.mult2, x4: t.mult4, desteBitti: t.deckOut, bitis: t.finish }; });
+    cb(null, out);
+  });
+}
 function introCount(p) { var n = 0; Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (c.cat === 'intro' && p.owned.indexOf(id) >= 0) n++; }); return n; } // Çaktırmadan Bak hakkı: sahip olunan Masa Giriş Skini sayısı (5 Ekim 2026 kararı)
 function ownsIntro(p, val) { return Object.keys(catalog).some(function (id) { var c = catalog[id]; return c.cat === 'intro' && c.val === val && p.owned.indexOf(id) >= 0; }); }
-module.exports = { cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
+module.exports = { logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };

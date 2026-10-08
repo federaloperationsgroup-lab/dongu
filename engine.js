@@ -800,7 +800,27 @@
     else if (g.phase === 'play') botPlay(g);
   }
 
+  // v9.76 "Maçın anı": maç geçmişinden türetilen, sunucunun da istemcinin de aynı biçimde hesapladığı tek olay cümlesi ("en iyi hamle" yargısı yok; yalnız olmuş olay).
+  // Öncelik: sahte okeyle ×4 bitiş → son elde birincilik değişti → okeyle ×2 bitiş → kafa eli bitişi → en çok el bitiren → en yakın fark → taş bitti.
+  function matchMoment(g) {
+    var H = g.history || []; if (!H.length || !g.names) return null;
+    var N = g.names, last = H[H.length - 1], first = last.ranks.indexOf(1), cnt = H.length;
+    var say = function (text, seat, kind) { return { text: text, seat: seat, kind: kind }; };
+    for (var i = 0; i < cnt; i++) if (H[i].winner != null && /×4/.test(H[i].finishType)) return say(N[H[i].winner] + ', ' + H[i].hand + '. eli özel elde sahte okeyle bitirdi (×4).', H[i].winner, 'x4');
+    if (cnt >= 2) { var prev = H[cnt - 2], prevFirst = prev.ranks.indexOf(1); if (prevFirst !== first && prev.ranks[first] >= 3) return say(N[first] + ' son elde ' + prev.ranks[first] + '. sıradan birinciliğe çıktı.', first, 'comeback'); if (prevFirst !== first) return say('Birincilik son elde el değiştirdi: ' + N[first] + ' öne geçti, ' + N[prevFirst] + ' geriye düştü.', first, 'lastHand'); }
+    for (var j = 0; j < cnt; j++) if (H[j].winner != null && /×2/.test(H[j].finishType)) return say(N[H[j].winner] + ', ' + H[j].hand + '. eli okeyle bitirdi (×2).', H[j].winner, 'x2');
+    for (var k = 0; k < cnt; k++) if (H[k].winner != null && H[k].detail && H[k].detail[H[k].winner] && H[k].detail[H[k].winner].count === 0 && /kafa/i.test((g.taskOrder && TASKS[g.taskOrder[k]] ? TASKS[g.taskOrder[k]].text : ''))) return say(N[H[k].winner] + ' kafa elini açılmadan tek seferde bitirdi.', H[k].winner, 'kafa');
+    var won = [0, 0, 0, 0]; H.forEach(function (h) { if (h.winner != null) won[h.winner]++; });
+    var top = won.indexOf(Math.max.apply(null, won));
+    if (cnt >= 3 && won[top] >= 2 && won[top] * 2 >= cnt) return say(N[top] + ' bu maçta ' + won[top] + ' el bitirdi (' + cnt + ' elde).', top, 'hands');
+    var order = [0, 1, 2, 3].sort(function (a, b) { return last.totals[a] - last.totals[b]; }); var gap = last.totals[order[1]] - last.totals[order[0]];
+    if (cnt >= 2 && gap <= 5) return say('Birincilik ' + gap + ' puanla belirlendi: ' + N[order[0]] + ' önde, ' + N[order[1]] + ' ikinci.', order[0], 'close');
+    if (last.winner == null) return say('Son elde taş bitti, kimse bitiremedi.', null, 'deckOut');
+    if (last.winner != null) return say(N[last.winner] + ' son eli bitirdi.', last.winner, 'last');
+    return null;
+  }
   return {
+    matchMoment: matchMoment,
     COLORS: COLORS, TASKS: TASKS,
     buildSet: buildSet, isJoker: isJoker, effective: effective, tileValue: tileValue, tileName: tileName,
     meldKind: meldKind, layoutMeld: layoutMeld, groupsSatisfyTask: groupsSatisfyTask,
