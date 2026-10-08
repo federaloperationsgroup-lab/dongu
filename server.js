@@ -31,7 +31,7 @@ function newRoom() {
 }
 // seat: { name, avatar, bot:boolean, token, ws|null, connected }
 function seatInfo(r) {
-  return r.seats.map(function (s, i) { return s ? { i: i, name: s.name, avatar: s.avatar, bot: !!s.bot, connected: !!(s.bot || (s.ws && s.ws.readyState === 1)) } : null; });
+  return r.seats.map(function (s, i) { return s ? { i: i, name: s.name, avatar: s.avatar, bot: !!s.bot, connected: !!(s.bot || (s.ws && s.ws.readyState === 1)), prof: s.prof || null } : null; }); // prof (v9.74): seviye, maç/galibiyet, kostüm sayısı, kıraathane adı — profil kartı için
 }
 function freeSeat(r) { for (var i = 0; i < 4; i++) if (!r.seats[i]) return i; return -1; }
 function fillBots(r) {
@@ -198,6 +198,7 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   Accounts.auth(s.acc, function (e, p) {
     if (e || !p) { s.skins = 0; s.free = null; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
     s.skins = Accounts.introCount(p);
+    var vn = Venues.ofOwner(p.id); s.prof = { level: Accounts.levelOf(p.xp).level, matches: (p.stats && p.stats.matches) || 0, wins: (p.stats && p.stats.wins) || 0, owned: (p.owned || []).length, venue: vn ? vn.name : null }; // v9.74 profil kartı
     if (Accounts.ensureSkinGift(p)) Accounts.save(p);
     s.free = Object.assign({}, p.freeSkins || {}); // ücretsiz başlangıç hakları (Çaktırmadan Bak + Masa Giriş Skini denemesi); kullanımda hesaptan düşer
     if (s.avatar) {
@@ -380,7 +381,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.73. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.74. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
