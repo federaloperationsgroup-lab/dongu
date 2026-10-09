@@ -327,7 +327,8 @@ function startGame(r) {
   r.matchId = r.code + '-' + Date.now().toString(36); // Masa Giriş Skini gösterimi bu kimlikle bir kez (yeniden bağlanma yeni hak vermez)
   r.g = Okey.newGame({ names: r.seats.map(function (s) { return s.name; }), jokerCapturePenalty: r.settings.jokerPenalty, totalHands: r.settings.totalHands });
   r.elig = null; r.factors = null; r.rewarded = {}; r.matchStart = Date.now(); r.humansStart = humanCount(r); r.matchLogged = false; r.moment = null; r.hosted = false; r.rematch = null;
-  r.hostVenue = pickHostVenue(r); // v9.76 görsel ev sahipliği (K-D2: oturma sırasında kıraathanesi olan ilk oyuncu; kıraathane masasında o kıraathane) r.actsAll = [0, 0, 0, 0]; r.pooled = false; r.actsTot = null; r.botActsTot = null; r.forfeit = null; r.poolExtra = 0; // yeni maç: katılım ve ödül kayıtları sıfır
+  r.actsAll = [0, 0, 0, 0]; r.pooled = false; r.actsTot = null; r.botActsTot = null; r.forfeit = null; r.poolExtra = 0; // yeni maç: katılım ve ödül kayıtları sıfır (v9.76.1: v9.76'da bu satır yorumun içinde kalmıştı → ev sahipliği ödülü hamle sayamıyor, rövanşta ceza/sayaç taşınıyordu)
+  r.hostVenue = pickHostVenue(r); // v9.76 görsel ev sahipliği (K-D2: oturma sırasında kıraathanesi olan ilk oyuncu; kıraathane masasında o kıraathane)
   Okey.startHand(r.g);
   beginPrep(r);
   consumeIntroTrials(r);
@@ -423,12 +424,29 @@ function unrot(meldIdx, seat, g) { return meldIdx; } // per indeksleri döndür�
 var fs = require('fs'), path = require('path');
 var PUBLIC = path.join(__dirname, 'public');
 // public.zip (oyun) ve assets.zip (büyük görseller) varsa ve public/ yoksa açılışta çıkar (GitHub'a klasör yüklemeden kurulum; GitHub web yüklemesi dosya başına 25 MB sınırı için ikiye bölünmüştür)
+var PKG_STATUS = ''; // v9.76: /durum'da paket parçası durumu ("Paket: v9.76, 8/8 parça" ya da eksik/eski parça uyarısı)
+function zipComment(buf) { var e = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])); if (e < 0) return ''; var n = buf.readUInt16LE(e + 20); return buf.slice(e + 22, e + 22 + n).toString('utf8').trim(); }
 function unzipPublic() {
   if (fs.existsSync(path.join(PUBLIC, 'index.html'))) return;
-  ['public.zip', 'assets.zip'].forEach(function (zname) { var zp = path.join(__dirname, zname); if (fs.existsSync(zp)) unzipInto(zp, zname); });
+  // v9.76: paket ~5 MB'lık parçalara bölünür (sohbetten indirme büyük dosyada takılıyordu). public.zip'in zip açıklaması parça listesini ve sürümü taşır;
+  // her parçanın açıklaması aynı sürümle başlar. Eksik parça ya da başka sürümden kalmış (eski) parça açılmaz, log'a ve /durum'a yazılır.
+  var base = path.join(__dirname, 'public.zip'), man = null;
+  if (fs.existsSync(base)) { var m = /^dongu-paket (\S+) parcalar: (.+)$/.exec(zipComment(fs.readFileSync(base))); if (m) man = { ver: m[1], parts: m[2].split(/\s+/).filter(Boolean) }; }
+  if (!man) { ['public.zip', 'assets.zip'].forEach(function (zname) { var zp = path.join(__dirname, zname); if (fs.existsSync(zp)) unzipInto(zp, zname); }); return; } // eski biçim (tek public.zip + assets.zip)
+  var ok = 0, bad = [];
+  man.parts.forEach(function (zname) {
+    if (!/^(public|assets)(-\d+)?\.zip$/.test(zname)) return;
+    var zp = path.join(__dirname, zname);
+    if (!fs.existsSync(zp)) { bad.push(zname + ' eksik'); console.log('EKSİK PARÇA: ' + zname + ' GitHub\'a yüklenmemiş; bazı görseller görünmeyebilir.'); return; }
+    var buf = fs.readFileSync(zp), c = zipComment(buf);
+    if (c.indexOf('dongu-paket ' + man.ver + ' ') !== 0) { bad.push(zname + ' eski'); console.log('ESKİ PARÇA: ' + zname + ' (' + (c || 'etiketsiz') + ') — ' + man.ver + ' bekleniyordu; açılmadı. Bu dosyayı yeni paketteki ile değiştir.'); return; }
+    unzipInto(zp, zname, buf); ok++;
+  });
+  PKG_STATUS = 'Paket: ' + man.ver + ', ' + ok + '/' + man.parts.length + ' parça' + (bad.length ? ' (SORUN: ' + bad.join(', ') + ')' : '');
+  console.log(PKG_STATUS);
 }
-function unzipInto(zipPath, zname) {
-  var zlib = require('zlib'), buf = fs.readFileSync(zipPath), n = 0;
+function unzipInto(zipPath, zname, preBuf) {
+  var zlib = require('zlib'), buf = preBuf || fs.readFileSync(zipPath), n = 0;
   var eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])); if (eocd < 0) { console.log(zname + ' okunamadı'); return; }
   var count = buf.readUInt16LE(eocd + 10), cdOff = buf.readUInt32LE(eocd + 16), p = cdOff;
   for (var i = 0; i < count; i++) {
@@ -455,7 +473,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.76. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç'); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.76.1. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
