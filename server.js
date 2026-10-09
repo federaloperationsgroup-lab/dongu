@@ -96,6 +96,7 @@ var REMATCH_WAIT = parseInt(process.env.REMATCH_WAIT) || 60000; // v9.76 "Bu mas
 var ROOM_GRACE_MS = parseInt(process.env.ROOM_GRACE_MS) || 10 * 60 * 1000; // v9.75: arkadaş odasında (başlamadan) bütün insanların bağlantısı kopsa da oda bu süre yaşar — kurucu kodu paylaşmak için uygulamadan çıkınca oda silinmesin
 var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 var ALLOW_LOCKED_STAKES = process.env.ALLOW_LOCKED_STAKES === '1'; // Usta / Efsane masaları (100 bin+) bayrakla açılır
+var TEST_RIG = process.env.TEST_RIG === '1'; // yalnız otomatik test: masayı kurgulama mesajı (canlıda tanımsız → kapalı)
 var TEST_FAKE_HAND = parseInt(process.env.TEST_FAKE_HAND) || 0; // yalnız test ortamı: 12 El maçında garanti özel el (gösterge sahte okey) bu ele konur; canlıda tanımsız → etkisiz
 function humanCount(r) { return r.seats.filter(function (s) { return s && !s.bot; }).length; }
 function refundEscrow(seat, why) { // emanetteki girişi iade et (maç başlamadı / iptal)
@@ -415,7 +416,7 @@ function handleAct(r, seat, m) {
     case 'open': Okey.actOpen(g, (m.groups || []).map(ids)); break;
     case 'lay': (m.groups || []).forEach(function (gr) { Okey.actLay(g, ids(gr)); }); break;
     case 'add': Okey.actAdd(g, unrot(m.meld, seat, g), ids(m.tiles)); break;
-    case 'swap': res = Okey.actSwapJoker(g, unrot(m.meld, seat, g), ids([m.tile])[0]); break;
+    case 'swap': res = (Array.isArray(m.tiles) && m.tiles.length) ? Okey.actSwapJokers(g, unrot(m.meld, seat, g), ids(m.tiles)) : Okey.actSwapJoker(g, unrot(m.meld, seat, g), ids([m.tile])[0]); break; // v9.81: birden çok okey tek işlemde
     case 'discard': res = Okey.actDiscard(g, ids([m.tile])[0]); break;
     default: throw new Error('bilinmeyen hamle');
   }
@@ -477,7 +478,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.80. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.81. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
@@ -651,6 +652,15 @@ function handle(ws, me, m) {
     return;
   }
   if (m.t === 'state') { if (r.g) send(ws, { t: 'state', view: viewFor(r, me.seat), event: 'resync' }); else broadcastRoom(r); return; } // uygulama öne gelince taze durum (v9.73)
+  if (m.t === 'testRig' && TEST_RIG && r.g) { // yalnız TEST_RIG=1 ortamında: eller, masa, sıra (mutlak koltuk) kurgulanır
+    var gq = r.g, S = m.state || {}, mk = function (x) { return { id: x[0], c: x[1], n: x[2], fake: !!x[3] }; };
+    if (S.ok) gq.ok = S.ok; if (S.task) gq.task = S.task;
+    if (S.hands) Object.keys(S.hands).forEach(function (k) { gq.players[+k].hand = S.hands[k].map(mk); });
+    if (S.opened) S.opened.forEach(function (o, i) { gq.players[i].opened = !!o; gq.players[i].openedThisTurn = false; gq.players[i].openedTurnNo = 0; });
+    if (S.table) gq.table = S.table.map(function (mm) { return { kind: mm.kind, owner: mm.owner, tiles: mm.tiles.map(function (x) { var t = mk(x); if (x[4] != null) t.placedBy = x[4]; if (x[5] != null) t.rep = x[5]; return t; }) }; });
+    if (S.cp != null) gq.cp = S.cp; if (S.phase) gq.phase = S.phase; if (S.turnNo != null) gq.turnNo = S.turnNo;
+    gq.handPen = [0, 0, 0, 0]; r.turnUntil = 0; clearTimeout(r.timer); clearTimeout(r.claimTimer); broadcastState(r, { event: 'resync' }); scheduleBots(r); return;
+  }
 }
 // boş odaları temizle
 setInterval(function () { var now = Date.now(); Object.keys(rooms).forEach(function (c) { var r = rooms[c]; var alive = r.seats.some(function (s) { return s && !s.bot && s.ws && s.ws.readyState === 1; }); if (alive) { r.emptySince = 0; return; } if (!r.g && !r.quick && !r.venue) { if (!r.emptySince) r.emptySince = now; if (now - r.emptySince > ROOM_GRACE_MS) { clearTimeout(r.timer); delete rooms[c]; log(r, 'kimse dönmedi, oda kapandı'); } return; } if (now - r.created > 30 * 60 * 1000) { if (r.g && !r.g.finished) logMatchRecord(r, now, false); clearTimeout(r.timer); delete rooms[c]; } }); }, 60000); // v9.75: başlamamış arkadaş odası ROOM_GRACE_MS boş kalınca kapanır; başlamış odalar 30 dk kuralı
