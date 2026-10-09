@@ -96,6 +96,7 @@ var REMATCH_WAIT = parseInt(process.env.REMATCH_WAIT) || 60000; // v9.76 "Bu mas
 var ROOM_GRACE_MS = parseInt(process.env.ROOM_GRACE_MS) || 10 * 60 * 1000; // v9.75: arkadaş odasında (başlamadan) bütün insanların bağlantısı kopsa da oda bu süre yaşar — kurucu kodu paylaşmak için uygulamadan çıkınca oda silinmesin
 var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 var ALLOW_LOCKED_STAKES = process.env.ALLOW_LOCKED_STAKES === '1'; // Usta / Efsane masaları (100 bin+) bayrakla açılır
+var TEST_FAKE_HAND = parseInt(process.env.TEST_FAKE_HAND) || 0; // yalnız test ortamı: 12 El maçında garanti özel el (gösterge sahte okey) bu ele konur; canlıda tanımsız → etkisiz
 function humanCount(r) { return r.seats.filter(function (s) { return s && !s.bot; }).length; }
 function refundEscrow(seat, why) { // emanetteki girişi iade et (maç başlamadı / iptal)
   if (!seat || !seat.escrow || !seat.acc) return; var amt = seat.escrow; seat.escrow = 0;
@@ -328,6 +329,7 @@ function startGame(r) {
   fillBots(r);
   r.matchId = r.code + '-' + Date.now().toString(36); // Masa Giriş Skini gösterimi bu kimlikle bir kez (yeniden bağlanma yeni hak vermez)
   r.g = Okey.newGame({ names: r.seats.map(function (s) { return s.name; }), jokerCapturePenalty: r.settings.jokerPenalty, totalHands: r.settings.totalHands });
+  if (TEST_FAKE_HAND && r.g.totalHands >= 12) r.g.guaranteedFakeIndicatorHand = TEST_FAKE_HAND;
   r.elig = null; r.factors = null; r.rewarded = {}; r.matchStart = Date.now(); r.humansStart = humanCount(r); r.matchLogged = false; r.moment = null; r.hosted = false; r.rematch = null;
   r.actsAll = [0, 0, 0, 0]; r.pooled = false; r.actsTot = null; r.botActsTot = null; r.forfeit = null; r.poolExtra = 0; // yeni maç: katılım ve ödül kayıtları sıfır (v9.76.1: v9.76'da bu satır yorumun içinde kalmıştı → ev sahipliği ödülü hamle sayamıyor, rövanşta ceza/sayaç taşınıyordu)
   r.hostVenue = pickHostVenue(r); // v9.76 görsel ev sahipliği (K-D2: oturma sırasında kıraathanesi olan ilk oyuncu; kıraathane masasında o kıraathane)
@@ -475,7 +477,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.78. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.80. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
