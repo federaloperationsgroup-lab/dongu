@@ -414,7 +414,7 @@ function handleAct(r, seat, m) {
     case 'claim': Okey.actClaim(g, seat, true); break;
     case 'pass': Okey.actClaim(g, seat, false); break;
     case 'open': Okey.actOpen(g, (m.groups || []).map(ids)); break;
-    case 'lay': (m.groups || []).forEach(function (gr) { Okey.actLay(g, ids(gr)); }); break;
+    case 'lay': (m.groups || []).forEach(function (gr, i) { var kh = Array.isArray(m.kinds) ? m.kinds[i] : null; Okey.actLay(g, ids(gr), (kh === 'run' || kh === 'set') ? kh : undefined); }); break; // v9.82: iki türlü okunabilen perde (iki okey + tek taş) oyuncunun seçtiği tür; motor yalnız gerçekten belirsiz perde dikkate alır
     case 'add': Okey.actAdd(g, unrot(m.meld, seat, g), ids(m.tiles)); break;
     case 'swap': res = (Array.isArray(m.tiles) && m.tiles.length) ? Okey.actSwapJokers(g, unrot(m.meld, seat, g), ids(m.tiles)) : Okey.actSwapJoker(g, unrot(m.meld, seat, g), ids([m.tile])[0]); break; // v9.81: birden çok okey tek işlemde
     case 'discard': res = Okey.actDiscard(g, ids([m.tile])[0]); break;
@@ -478,7 +478,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.81. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.83. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
