@@ -169,10 +169,11 @@ function beginPrep(r) {
   var humans = r.seats.some(function (s) { return s && !s.bot && s.ws && s.ws.readyState === 1; });
   r.prepUntil = humans ? Date.now() + PREP_MS : 0;
 }
-function seatFree(s, id) { return (s && s.free && s.free[id]) || 0; } // koltuğun hesaptan okunmuş ücretsiz skin hakları (sanitizeSeat doldurur)
+function seatFree(s, id) { return (s && s.free && s.free[id]) || 0; }
+function seatPaid(s, id) { return (s && s.paid && s.paid[id]) || 0; } // v9.88: satın alınmış kullanım hakları (sanitizeSeat doldurur) // koltuğun hesaptan okunmuş ücretsiz skin hakları (sanitizeSeat doldurur)
 function endPeek(r, from, reason) {
   var p = r.peeks[from]; if (!p) return; clearTimeout(p.timer); clearTimeout(p.botTimer); delete r.peeks[from];
-  if ((r.charges[from] > 0 || seatFree(r.seats[from], 'bak') > 0) && r.prepUntil) r.prepUntil = Math.max(r.prepUntil, Date.now() + 6000); // kalan hak için 6 sn ek süre
+  if ((r.charges[from] > 0 || seatFree(r.seats[from], 'bak') > 0 || seatPaid(r.seats[from], 'bak') > 0) && r.prepUntil) r.prepUntil = Math.max(r.prepUntil, Date.now() + 6000); // kalan hak için 6 sn ek süre
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws) send(s.ws, { t: 'peekEnd', from: rotateIdx(from, i), target: rotateIdx(p.target, i), reason: reason }); });
   log(r, r.seats[from].name + ' bakışı bitti: ' + reason);
 }
@@ -181,20 +182,23 @@ function handlePeek(r, seat, m) {
   if (r.league && Economy.CONFIG.league.peekOff) throw new Error('Lig maçında Çaktırmadan Bak kapalı: herkes eşit şartlarda oynar.'); // v9.87 (D7)
   if (!r.prepUntil || Date.now() >= r.prepUntil) throw new Error('Yetenek yalnızca el başındaki hazırlık aşamasında kullanılır.');
   if (r.peeks[seat]) throw new Error('Zaten bir rakibe bakıyorsun.');
-  var me = r.seats[seat], usedFree = false;
-  if (!(r.charges[seat] > 0) && !(seatFree(me, 'bak') > 0)) throw new Error('Bu elde kullanım hakkın kalmadı.');
+  var me = r.seats[seat], usedFree = false, usedPaid = false;
+  if (!(r.charges[seat] > 0) && !(seatFree(me, 'bak') > 0) && !(seatPaid(me, 'bak') > 0)) throw new Error('Bu elde kullanım hakkın kalmadı.');
   var target = (parseInt(m.target) + seat) % 4; // istemci döndürülmüş koltuk gönderir
   if (isNaN(target) || target === seat || target < 0 || target > 3) throw new Error('geçersiz hedef');
-  if (r.charges[seat] > 0) r.charges[seat]--;
-  else { // ücretsiz başlangıç hakkı: kullanım kabul edildiği anda hesaptan düşer (bir kez; yakalanınca geri gelmez)
+  if (r.charges[seat] > 0) r.charges[seat]--; // sıra (K110): el hakkı (skin/karakter) → ücretsiz deneme → satın alınmış kullanım
+  else if (seatFree(me, 'bak') > 0) { // ücretsiz başlangıç hakkı: kullanım kabul edildiği anda hesaptan düşer (bir kez; yakalanınca geri gelmez)
     usedFree = true; me.free.bak--;
     Accounts.grant(me.acc, function (p) { Accounts.useFreeSkin(p, 'bak'); return {}; }, function (e, out, view) { if (!e && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'me', player: view }); });
+  } else { // v9.88: satın alınmış kullanım (mağaza paketi) — kabul edildiği anda hesaptan düşer
+    usedPaid = true; me.paid.bak--;
+    Accounts.grant(me.acc, function (p) { Accounts.usePaidSkin(p, 'bak'); return {}; }, function (e, out, view) { if (!e && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'me', player: view }); });
   }
   var until = Date.now() + PEEK_MS, pk = { target: target, until: until };
   r.peeks[seat] = pk;
   if (r.prepUntil < until + 500) r.prepUntil = until + 500; // bakış sürerken oyun başlamaz
   pk.timer = setTimeout(function () { endPeek(r, seat, 'time'); }, PEEK_MS);
-  send(me.ws, { t: 'peek', target: rotateIdx(target, seat), charges: r.charges[seat], free: seatFree(me, 'bak'), usedFree: usedFree, left: PEEK_MS, hand: g.players[target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }) }); // taşlar sadece bakana
+  send(me.ws, { t: 'peek', target: rotateIdx(target, seat), charges: r.charges[seat], free: seatFree(me, 'bak'), paid: seatPaid(me, 'bak'), usedFree: usedFree, usedPaid: usedPaid, left: PEEK_MS, hand: g.players[target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }) }); // taşlar sadece bakana
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && i !== seat) send(s.ws, { t: 'peekAnim', from: rotateIdx(seat, i), target: rotateIdx(target, i), left: PEEK_MS }); });
   var ts = r.seats[target];
   if (ts.bot || !ts.ws || ts.ws.readyState !== 1) { if (Math.random() < 0.45) pk.botTimer = setTimeout(function () { if (r.peeks[seat] === pk) endPeek(r, seat, 'slap'); }, 1500 + Math.random() * 5000); }
@@ -217,6 +221,7 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
     s.venue = vn ? { code: vn.code, name: vn.name, tier: vn.tier, tierName: Economy.venueTier(vn.tier).name } : null; // v9.76 ev sahibi kartı için
     if (Accounts.ensureSkinGift(p)) Accounts.grant(s.acc, function (q) { Accounts.ensureSkinGift(q); return {}; }); // v9.86: yazma hesap kilidi altında (eşzamanlı ödülü silmesin)
     s.free = Object.assign({}, p.freeSkins || {}); // ücretsiz başlangıç hakları (Çaktırmadan Bak + Masa Giriş Skini denemesi); kullanımda hesaptan düşer
+    s.paid = Object.assign({}, p.skinUses || {}); // v9.88: satın alınmış kullanım hakları
     if (s.avatar) {
       var before = JSON.stringify(s.avatar); s.avatar = Accounts.cleanCosmetics(p, Accounts.cleanAvatar(s.avatar)); s.introTrial = null;
       if (s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) { if (Accounts.freeLeft(p, s.avatar.intro) > 0) s.introTrial = s.avatar.intro; else delete s.avatar.intro; } // sahip değil: ücretsiz deneme hakkı varsa bu maç için kalır (maç başında düşer), yoksa kalkar
@@ -651,7 +656,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.87. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.88. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });

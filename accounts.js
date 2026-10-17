@@ -23,14 +23,46 @@ function init(opts, cb) {
     DB = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 5 });
     DB.query('CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())')
       .then(function () { return DB.query('CREATE TABLE IF NOT EXISTS match_log (id SERIAL PRIMARY KEY, at TIMESTAMPTZ DEFAULT now(), data JSONB NOT NULL)'); }) // v9.76 ölçüm: el/maç kayıtları
-      .then(function () { mode = 'postgres'; cb(null, mode); })
+      .then(function () { mode = 'postgres'; wipeIfRequested(function () { cb(null, mode); }); })
       .catch(function (e) { DB = null; fileMode(cb, e.message); });
   } else fileMode(cb, null);
 }
 function fileMode(cb, why) {
   mode = 'dosya';
-  try { mem = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { mem = {}; }
-  cb(why ? new Error(why) : null, mode);
+  wipeIfRequested(function () {
+    try { mem = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { mem = {}; }
+    cb(why ? new Error(why) : null, mode);
+  });
+}
+// ---- v9.87.1 sıfırlama (SIFIRLA ortam değişkeni): açılışta bütün oyuncular, kıraathaneler, süren maçlar ve ölçüm kayıtları BİR KEZ silinir.
+// Yapılan sıfırlamanın değeri meta tablosuna (dosya modunda data/meta.json) yazılır; aynı değerle sonraki açılışlarda tekrar silinmez.
+// Yeni bir sıfırlama için değeri değiştirmek yeter (ör. tarih). Değişken yoksa hiçbir şey yapılmaz. Cihazlardaki eski misafir hesapları
+// "Hesap bulunamadı" alır ve uygulama kendiliğinden yeni misafir hesabı açar. ----
+var META_FILE = path.join(__dirname, 'data', 'meta.json'), WIPE_TAG = String(process.env.SIFIRLA || '').trim().slice(0, 60), lastWipe = null;
+var SQL_PLAYERS = 'CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())';
+var SQL_MATCHLOG = 'CREATE TABLE IF NOT EXISTS match_log (id SERIAL PRIMARY KEY, at TIMESTAMPTZ DEFAULT now(), data JSONB NOT NULL)';
+function readMeta(cb) {
+  if (DB) { DB.query('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)').then(function () { return DB.query("SELECT v FROM meta WHERE k='sifirla'"); }).then(function (r) { cb(null, r.rows[0] ? r.rows[0].v : null); }).catch(function (e) { cb(e); }); return; }
+  var m = {}; try { m = JSON.parse(fs.readFileSync(META_FILE, 'utf8')); } catch (e) {} cb(null, m.sifirla || null);
+}
+function writeMeta(v, cb) {
+  if (DB) { DB.query("INSERT INTO meta (k, v) VALUES ('sifirla', $1) ON CONFLICT (k) DO UPDATE SET v=$1", [v]).then(function () { cb(null); }).catch(function (e) { cb(e); }); return; }
+  var m = {}; try { m = JSON.parse(fs.readFileSync(META_FILE, 'utf8')); } catch (e) {} m.sifirla = v;
+  try { fs.mkdirSync(path.dirname(META_FILE), { recursive: true }); fs.writeFileSync(META_FILE, JSON.stringify(m)); cb(null); } catch (e) { cb(e); }
+}
+function wipeIfRequested(cb) {
+  readMeta(function (e, done) {
+    if (e) { console.log('sıfırlama işareti okunamadı: ' + e.message); return cb(); }
+    lastWipe = done || null;
+    if (!WIPE_TAG) return cb();
+    if (done === WIPE_TAG) { console.log('sıfırlama daha önce yapılmış (SIFIRLA=' + WIPE_TAG + '); veriler korunuyor'); return cb(); }
+    var fin = function (err) {
+      if (err) { console.log('SIFIRLAMA BAŞARISIZ: ' + err.message + ' — veriler olduğu gibi kaldı'); return cb(); }
+      writeMeta(WIPE_TAG, function (e2) { if (e2) console.log('sıfırlama işareti yazılamadı: ' + e2.message); lastWipe = WIPE_TAG; mem = {}; mcount = { hands: 0, matches: 0 }; mcountReady = false; console.log('SIFIRLAMA YAPILDI (SIFIRLA=' + WIPE_TAG + '): bütün oyuncu hesapları, kıraathaneler, süren maçlar ve ölçüm kayıtları silindi'); cb(); });
+    };
+    if (DB) { DB.query('DROP TABLE IF EXISTS players, venues, rooms, match_log').then(function () { return DB.query(SQL_PLAYERS); }).then(function () { return DB.query(SQL_MATCHLOG); }).then(function () { fin(null); }).catch(fin); return; }
+    try { ['players.json', 'venues.json', 'rooms.json', 'rooms.json.tmp', 'matches.jsonl'].forEach(function (f) { try { fs.unlinkSync(path.join(__dirname, 'data', f)); } catch (e) {} }); fin(null); } catch (ex) { fin(ex); }
+  });
 }
 function flushFile() { saveTimer = null; try { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(mem)); } catch (e) {} }
 function get(id, cb) {
@@ -67,7 +99,7 @@ function cleanAvatar(a) { if (!a || typeof a !== 'object') return null; var o = 
 // Sahip olunmayan ücretli kozmetik giyilemez: katalogdaki (k, val) eşleşmesi ücretliyse ve hesapta yoksa yuva varsayılana döner (intro ayrıca denetlenir)
 function cleanCosmetics(p, av) {
   if (!av) return av;
-  Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (!c || !c.k || c.cat === 'intro' || c.cat === 'tiles' || c.cat === 'theme') return; if (av[c.k] === c.val && !c.free && (c.price || 0) > 0 && p.owned.indexOf(id) < 0) av[c.k] = SLOT_DEFAULT[c.k] || 'yok'; });
+  Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (!c || !c.k || c.cat === 'intro' || c.cat === 'tiles' || c.cat === 'theme' || c.cat === 'uses') return; if (av[c.k] === c.val && !c.free && (c.price || 0) > 0 && p.owned.indexOf(id) < 0) av[c.k] = SLOT_DEFAULT[c.k] || 'yok'; });
   return av;
 }
 
@@ -79,13 +111,14 @@ function freeLeft(p, id) { return (p && p.freeSkins && p.freeSkins[id]) || 0; }
 function useFreeSkin(p, id) { if (!(freeLeft(p, id) > 0)) return false; p.freeSkins[id]--; p.freeUsed = p.freeUsed || {}; p.freeUsed[id] = Date.now(); return true; }
 function publicView(p) {
   var now = Date.now(), lv = levelOf(p.xp), ec = Economy.summary(p, now);
-  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now) }; // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
+  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned) }; // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
 }
 function takeView(p) { var v = publicView(p); if (p.skinGiftNew) { delete p.skinGiftNew; return { view: v, dirty: true }; } return { view: v, dirty: false }; } // hoş geldin bildirimi bir kez: bayrak ilk görünümle düşer (kayıt çağıranın tek yazmasıyla)
 function create(body, cb) {
   var p = { id: newId(), token: newToken(), name: cleanName(body.name), avatar: cleanAvatar(body.avatar), coins: START_COINS, xp: 0, owned: [], lastBonus: 0, stats: { hands: 0, matches: 0, wins: 0 }, created: Date.now(), lastSeen: Date.now() };
   // cihazdaki eski dolap (prototipten geçiş): yalnızca ücretsiz ya da zaten var olan ürünler aktarılır, jeton aktarılmaz
   if (Array.isArray(body.owned)) body.owned.slice(0, 60).forEach(function (id) { var c = catalog[id]; if (typeof id === 'string' && c && (c.free || !c.price) && p.owned.indexOf(id) < 0) p.owned.push(id); });
+  p.charMig = 1; // v9.88: yeni hesap ücretsiz dönemi görmedi; geçiş temizliği uygulanmaz (ilk /api/me satın alınmış karakteri silmesin)
   ensureSkinGift(p); Economy.syncArenas(p);
   var tv = takeView(p);
   put(p, function (e) { if (e) return cb(e); cb(null, { id: p.id, token: p.token, player: tv.view }); });
@@ -113,11 +146,12 @@ function lockedAuth(body, cb, work) {
 function me(body, cb) {
   lockedAuth(body, cb, function (p, fin) {
     var changed = ensureSkinGift(p); // eski hesaplar da ilk girişte bir kez alır (yalnız bir kerelik hak; alımlar değişmez)
+    if (!p.charMig) { p.charMig = 1; changed = true; Economy.CONFIG.characters.forEach(function (c) { var i = p.owned.indexOf(c.id); if (i >= 0) p.owned.splice(i, 1); }); } // v9.88 geçişi (bir kez): özel karakterler ücretsiz dönemde dolaba 0 altınla girmişti; artık satın alınır (altın + seviye). Giyiliyse cleanCosmetics kendi karaktere döndürür.
     var hadArenas = !!p.arenas; if (Economy.syncArenas(p).length || !hadArenas) changed = true; // v9.86: koşulu sağlanan mekânlar hesaba yazılır (eski hesap: ilk girişte)
     if (body.name) { var n = cleanName(body.name); if (n !== p.name) { p.name = n; changed = true; } }
     if (body.avatar) { p.avatar = cleanCosmetics(p, cleanAvatar(body.avatar)); changed = true;
       if (p.avatar && p.avatar.intro) { // Masa Giriş Skini: yalnızca sahip olunan kuşanılabilir (deneme hakkı koltuğa oturulurken ayrıca değerlendirilir)
-        var okIntro = Object.keys(catalog).some(function (id) { var c = catalog[id]; return c.cat === 'intro' && c.val === p.avatar.intro && p.owned.indexOf(id) >= 0; });
+        var okIntro = ownsIntro(p, p.avatar.intro); // v9.88: karakter sahipliğiyle açılan skin de kuşanılabilir
         if (!okIntro) delete p.avatar.intro;
       }
     }
@@ -127,8 +161,12 @@ function me(body, cb) {
 }
 function skinUse(body, cb) { // bot masasında (istemci tarafı antrenman maçı) ücretsiz skin kullanımı: hesaptan 1 düşer; çevrim içi masada sunucu kendisi düşer
   lockedAuth(body, cb, function (p, fin) {
-    var id = String(body.id || ''); if (skinIds().indexOf(id) < 0) return fin(new Error('Bilinmeyen skin.'));
+    var id = String(body.skin || ''); if (skinIds().indexOf(id) < 0) return fin(new Error('Bilinmeyen skin.')); // v9.88: skin kimliği body.skin (body.id hesap kimliğidir; eski istemci ikisini karıştırıyordu, istek hiç geçmiyordu)
     ensureSkinGift(p);
+    if (body.paid) { // v9.88: satın alınmış kullanım hakkı (bot masasında istemci bildirir; çevrim içi masada sunucu kendisi düşer)
+      if (!usePaidSkin(p, id)) return fin(new Error('Bu skin için satın alınmış kullanım hakkın yok.'));
+      var tv2 = takeView(p); return fin(null, { player: tv2.view, left: paidLeft(p, id), paid: true }, true);
+    }
     if (!useFreeSkin(p, id)) return fin(new Error('Bu skin için ücretsiz kullanım hakkın kalmadı.'));
     var tv = takeView(p);
     fin(null, { player: tv.view, left: freeLeft(p, id) }, true);
@@ -150,11 +188,20 @@ function tutorial(body, cb) { // eğitimi ilk tamamlama ödülü (bir kez)
 function buy(body, cb) {
   lockedAuth(body, cb, function (p, fin) {
     var c = catalog[body.item]; if (!c) return fin(new Error('Ürün bulunamadı.'));
+    var tx = typeof body.tx === 'string' ? body.tx.slice(0, 40) : ''; // v9.88: işlem kimliği — çift dokunma / yanıt kaybolup yeniden deneme ikinci tahsilat yapmaz
+    if (tx && (p.txs || []).indexOf(tx) >= 0) return fin(null, { player: publicView(p), repeated: true });
+    var pack = Economy.skinUseItem(c.id);
+    if (pack) { // tüketilebilir kullanım paketi: sahiplik yok, tekrar alınabilir; hesaba kullanım eklenir
+      if (p.coins < (c.price || 0)) return fin(new Error('Yeterli altın yok.'));
+      p.coins -= (c.price || 0); p.skinUses = p.skinUses || {}; p.skinUses[pack.skin] = (p.skinUses[pack.skin] || 0) + pack.uses;
+      if (tx) p.txs = (p.txs || []).concat([tx]).slice(-20);
+      return fin(null, function () { return { player: publicView(p), uses: p.skinUses[pack.skin] }; }, true);
+    }
     if (p.owned.indexOf(c.id) >= 0) return fin(null, { player: publicView(p), already: true });
     var needLv = Economy.itemLevel(c.id), myLv = levelOf(p.xp).level; if (needLv && myLv < needLv) return fin(new Error(c.name + ' seviye ' + needLv + ' olunca açılır (sen: seviye ' + myLv + ').')); // v9.86: seviyeyle açılan kostüm
     var price = c.free ? 0 : (c.price || 0);
     if (p.coins < price) return fin(new Error('Yeterli jeton yok.'));
-    p.coins -= price; p.owned.push(c.id);
+    p.coins -= price; p.owned.push(c.id); if (tx) p.txs = (p.txs || []).concat([tx]).slice(-20); if (Economy.charOf(c.id)) p.charMig = 1; // v9.88: satın alınmış karakteri geçiş temizliği asla silmez
     fin(null, function () { return { player: publicView(p) }; }, true);
   });
 }
@@ -286,6 +333,9 @@ function matchSummary(cb) { // /olcum: görev başına açılma, el uzunluğu, b
     cb(null, out);
   });
 }
-function introCount(p) { var n = 0; Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (c.cat === 'intro' && p.owned.indexOf(id) >= 0) n++; }); return n; } // Çaktırmadan Bak hakkı: sahip olunan Masa Giriş Skini sayısı (5 Ekim 2026 kararı)
-function ownsIntro(p, val) { return Object.keys(catalog).some(function (id) { var c = catalog[id]; return c.cat === 'intro' && c.val === val && p.owned.indexOf(id) >= 0; }); }
-module.exports = { withLock: withLock, leagueChanged: leagueChanged, leaderboard: leaderboard, logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
+function ownedIntroVals(p) { var g = Economy.charGrants(p.owned || []), vals = g.intros.slice(); Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (c.cat === 'intro' && p.owned.indexOf(id) >= 0 && vals.indexOf(c.val) < 0) vals.push(c.val); }); return vals; } // sahip olunan + karakterle açılan Masa Giriş Skinleri (v9.88)
+function introCount(p) { return Economy.bakCharges(ownedIntroVals(p).length, p.owned || []); } // Çaktırmadan Bak el hakkı: sahip olunan/karakterle açılan Masa Giriş Skini sayısı, en çok 5; allSkins karakteri → en çok (K5 + K110)
+function paidLeft(p, id) { return (p && p.skinUses && p.skinUses[id]) || 0; }
+function usePaidSkin(p, id) { if (!(paidLeft(p, id) > 0)) return false; p.skinUses[id]--; return true; }
+function ownsIntro(p, val) { return ownedIntroVals(p).indexOf(val) >= 0; } // satın alınmış ya da karakter sahipliğiyle açılmış
+module.exports = { lastWipe: function () { return lastWipe; }, withLock: withLock, leagueChanged: leagueChanged, leaderboard: leaderboard, logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, paidLeft: paidLeft, usePaidSkin: usePaidSkin, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
