@@ -254,7 +254,7 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   Accounts.auth(s.acc, function (e, p) {
     if (e || !p) { s.skins = 0; s.free = null; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
     s.skins = Accounts.introCount(p); s.actions = Accounts.ownedActions(p); // v9.91 (K116)
-    var vn = Venues.ofOwner(p.id); s.prof = { level: Accounts.levelOf(p.xp).level, matches: (p.stats && p.stats.matches) || 0, wins: (p.stats && p.stats.wins) || 0, owned: (p.owned || []).length, venue: vn ? vn.name : null, venueTier: vn ? vn.tier : null, arenas: Economy.CONFIG.arenas.filter(function (a) { return Economy.arenaOpen(p, a.theme); }).length, lp: Economy.leaguePoints(p, Date.now()) }; // v9.74 profil kartı (v9.86: açık mekân sayısı · v9.87: bu sezonun Döngü Puanı)
+    var vn = Venues.ofOwner(p.id); s.prof = { id: p.id, level: Accounts.levelOf(p.xp).level, matches: (p.stats && p.stats.matches) || 0, wins: (p.stats && p.stats.wins) || 0, owned: (p.owned || []).length, venue: vn ? vn.name : null, venueTier: vn ? vn.tier : null, arenas: Economy.CONFIG.arenas.filter(function (a) { return Economy.arenaOpen(p, a.theme); }).length, lp: Economy.leaguePoints(p, Date.now()) }; // v9.74 profil kartı (v9.86: açık mekân sayısı · v9.87: bu sezonun Döngü Puanı)
     s.venue = vn ? { code: vn.code, name: vn.name, tier: vn.tier, tierName: Economy.venueTier(vn.tier).name } : null; // v9.76 ev sahibi kartı için
     if (Accounts.ensureSkinGift(p)) Accounts.grant(s.acc, function (q) { Accounts.ensureSkinGift(q); return {}; }); // v9.86: yazma hesap kilidi altında (eşzamanlı ödülü silmesin)
     s.free = Object.assign({}, p.freeSkins || {}); // ücretsiz başlangıç hakları (Çaktırmadan Bak + Masa Giriş Skini denemesi); kullanımda hesaptan düşer
@@ -510,12 +510,13 @@ function unzipPublic() {
   if (fs.existsSync(base)) { var m = /^dongu-paket (\S+) parcalar: (.+)$/.exec(zipComment(fs.readFileSync(base))); if (m) man = { ver: m[1], parts: m[2].split(/\s+/).filter(Boolean) }; }
   if (!man) { ['public.zip', 'assets.zip'].forEach(function (zname) { var zp = path.join(__dirname, zname); if (fs.existsSync(zp)) unzipInto(zp, zname); }); return; } // eski biçim (tek public.zip + assets.zip)
   var ok = 0, bad = [];
-  man.parts.forEach(function (zname) {
+  man.parts.forEach(function (entry) { // v9.93: "assets.zip@k-…" → parça içerik etiketiyle doğrulanır (görseller değişmediyse eski assets.zip geçerli); etiketsiz girdi sürümle
+    var at = entry.indexOf('@'), zname = at > 0 ? entry.slice(0, at) : entry, tag = at > 0 ? entry.slice(at + 1) : man.ver;
     if (!/^(public|assets)(-\d+)?\.zip$/.test(zname)) return;
     var zp = path.join(__dirname, zname);
     if (!fs.existsSync(zp)) { bad.push(zname + ' eksik'); console.log('EKSİK PARÇA: ' + zname + ' GitHub\'a yüklenmemiş; bazı görseller görünmeyebilir.'); return; }
     var buf = fs.readFileSync(zp), c = zipComment(buf);
-    if (c.indexOf('dongu-paket ' + man.ver + ' ') !== 0) { bad.push(zname + ' eski'); console.log('ESKİ PARÇA: ' + zname + ' (' + (c || 'etiketsiz') + ') — ' + man.ver + ' bekleniyordu; açılmadı. Bu dosyayı yeni paketteki ile değiştir.'); return; }
+    if (c.indexOf('dongu-paket ' + tag + ' ') !== 0) { bad.push(zname + ' eski'); console.log('ESKİ PARÇA: ' + zname + ' (' + (c || 'etiketsiz') + ') — ' + tag + ' bekleniyordu; açılmadı. Bu dosyayı yeni paketteki ile değiştir.'); return; }
     unzipInto(zp, zname, buf); ok++;
   });
   PKG_STATUS = 'Paket: ' + man.ver + ', ' + ok + '/' + man.parts.length + ' parça' + (bad.length ? ' (SORUN: ' + bad.join(', ') + ')' : '');
@@ -544,6 +545,7 @@ function unzipInto(zipPath, zname, preBuf) {
 }
 try { unzipPublic(); } catch (e) { console.log('zip açma hatası: ' + e.message); }
 var Venues = require('./venues.js');
+var Social = null; try { Social = require('./social.js'); } catch (e) { console.log('sosyal modül yüklenemedi (arkadaşlık/mesaj kapalı): ' + e.message); } // v9.93 (K118): dosya yoksa oyun yine çalışır
 // ---- v9.85 kalıcı oda kaydı (K106) ----
 // Başlamış ve bitmemiş maçlar Postgres'te "rooms" tablosunda (DATABASE_URL yoksa data/rooms.json dosyasında) tutulur. Sunucu yeniden kurulunca (deploy)
 // ya da yeniden başlayınca oda geri yüklenir; oyuncuların uygulaması aynı oda kodu ve koltuk anahtarıyla kendiliğinden yeniden bağlanır, maç kaldığı yerden sürer.
@@ -688,12 +690,14 @@ Accounts.init({ publicDir: PUBLIC }, function (e, mode) { setImmediate(function 
   loadRooms(function () { if (restoredN) console.log('kayıttan geri yüklenen oda: ' + restoredN); startListening(); });
   setTimeout(releaseStaleEscrows, ESCROW_RELEASE_MS); // v9.85: önceden açılışta hemen iade ediliyordu (geri yüklenen bahisli maçın girişi de iade edilirdi)
   Venues.init({ accounts: Accounts, db: Accounts.db() }, function (e2) { console.log('kıraathane deposu hazır' + (e2 ? ' (' + e2.message + ')' : '')); });
+  if (Social) Social.init(function (e3, smode) { console.log('sosyal depo: ' + (smode || '?') + (e3 ? ' (' + e3.message + ')' : '')); });
 }); });
 Accounts.route('/api/venue/', Venues.handleHttp);
+if (Social) { Accounts.route('/api/social/', Social.handleHttp); Accounts.route('/api/dm/', Social.handleHttp); } // v9.93
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.92. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.93. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
@@ -723,7 +727,7 @@ wss.on('connection', function (ws) {
   });
   ws.on('close', function (code, reason) {
     if (SHUTTING) return; // v9.85: kapanışta bağlantılar sunucu tarafından kapatılır; oda kayıttaki haliyle kalır
-    venueLeave(me);
+    venueLeave(me); if (Social) Social.detach(ws);
     var r = me.room; if (!r || me.seat < 0) return;
     var sc = r.seats[me.seat]; log(r, (sc ? sc.name : '?') + ' bağlantı kapandı (kod ' + code + (reason && reason.length ? ', ' + String(reason).slice(0, 60) : '') + (sc && sc.ws === ws ? '' : ', eski bağlantı') + ')'); // v9.73: kopma nedeni log'da
     var s = r.seats[me.seat]; if (s && s.ws === ws) { s.ws = null; if (r.g && r.part) { var pt = partOf(r, me.seat); if (!pt.discAt) pt.discAt = Date.now(); } if (!r.g && s.escrow) { refundEscrow(s, 'bağlantı koptu'); r.seats[me.seat] = null; } }
@@ -850,6 +854,7 @@ function handle(ws, me, m) {
     venueBroadcast(sv.code, { t: 'vtables', tables: venueTables(sv.code) });
     return;
   }
+  if (m.t === 'social') { if (!Social) throw new Error('Arkadaşlık sistemi bu sunucuda kapalı.'); Social.hello(ws, accOf(m), function (e, sm) { if (e) send(ws, { t: 'social', ev: 'denied', msg: e.message }); else send(ws, { t: 'social', ev: 'hello', requests: sm.requests, unread: sm.unread }); }); return; } // v9.93 (K118): sosyal soket (odasız): çevrim içi varlık + anlık bildirimler
   if (m.t === 'ping') { send(ws, { t: 'pong' }); return; } // v9.78: canlı tutma odasız bağlantıda da (kıraathane) — eskiden 25 sn'de bir "Önce bir odaya katılmalısın" uyarısı üretiyordu
   r = me.room; if (!r) throw new Error('önce odaya katıl');
   if (m.t === 'leave') { if (r.rematch && r.g && r.g.finished) { var lr = r.seats[me.seat]; if (lr) { lr.left = true; } r.rematch.votes[me.seat] = false; var pend = r.seats.some(function (x, i) { return x && !x.bot && !x.left && x.ws && x.ws.readyState === 1 && r.rematch.votes[i] === undefined; }); me.room = null; broadcastRematch(r); if (!pend) resolveRematch(r); return; } var ls = r.seats[me.seat]; if (!r.g && ls && ls.escrow) refundEscrow(ls, 'masadan ayrıldı'); r.seats[me.seat] = r.g ? r.seats[me.seat] : null; if (r.g) { ls.ws = null; if (r.part) { var pl = partOf(r, me.seat); if (!pl.discAt) pl.discAt = Date.now(); } if (!r.g.finished) { ls.left = true; if (!r.forfeit) r.forfeit = [false, false, false, false]; r.forfeit[me.seat] = true; if (r.settings.entry && ls.acc && !ls.penalty) leavePenalty(r, me.seat); } } me.room = null; if (!r.g && r.host === me.seat) transferHost(r); if (!r.g && !r.seats.some(function (x) { return x && !x.bot; })) { clearTimeout(r.quickTimer); clearTimeout(r.timer); delete rooms[r.code]; return; } broadcastRoom(r); if (r.g) scheduleBots(r); return; } // v9.75: kurucu başlamadan ayrılırsa yetki sıradaki insana geçer; insan kalmazsa oda kapanır // çıkan oyuncunun sırasıysa sunucu hemen devralır (önce AFK süresine kadar bekliyordu)
