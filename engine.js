@@ -844,7 +844,13 @@
 
   function botPlay(g) {
     var cp = g.cp, p = g.players[cp], ok = g.ok;
+    var keep = g.botCalm ? 3 : 1; // v9.89 (K111): eğitim botu dersi bozmaz — eli bitirmez (en az 3 taş tutar), kafa görevinde bitirmez
     if (!g.task.req) { // kafa
+      if (g.botCalm) { // sakin bot: eli bitirmeyecek bir taş at (kalan el tam dizilmesin); hepsi bitiriyorsa (olağanüstü) ilk taşı at
+        var pick = botChooseDiscard(g, p), cand = [pick].concat(p.hand.filter(function (t) { return t !== pick; }));
+        for (var ci = 0; ci < cand.length; ci++) { var rest2 = p.hand.filter(function (t) { return t !== cand[ci]; }); if (!(rest2.length && partition(rest2, ok, 0))) { actDiscard(g, cand[ci]); return; } }
+        actDiscard(g, pick); return;
+      }
       var fin = null;
       for (var i = 0; i < p.hand.length; i++) {
         var rest = p.hand.slice(0, i).concat(p.hand.slice(i + 1));
@@ -861,12 +867,12 @@
     }
     // açılmış: olabildiğince yere koy / işle, 1 taş kalsın
     var guard = 0;
-    while (guard++ < 30 && p.hand.length > 1) {
+    while (guard++ < 30 && p.hand.length > keep) {
       // önce jokersiz gruplar (jokeri son taş olarak atmak için sakla)
       var nonJ = p.hand.filter(function (t) { return !isJoker(t, ok); });
       var cover = maxCover(nonJ, ok);
       if (cover.count === 0) cover = maxCover(p.hand, ok);
-      if (cover.count > 0 && cover.melds[0].tiles.length < p.hand.length) { actLay(g, cover.melds[0].tiles); continue; }
+      if (cover.count > 0 && p.hand.length - cover.melds[0].tiles.length >= keep) { actLay(g, cover.melds[0].tiles); continue; }
       // masadaki okeyi gerçek taşla al (varsa)
       var swapped = false;
       for (var sh = 0; sh < p.hand.length && !swapped; sh++) {
