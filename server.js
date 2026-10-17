@@ -199,7 +199,12 @@ function handlePeek(r, seat, m) {
   r.peeks[seat] = pk;
   if (r.prepUntil < until + 500) r.prepUntil = until + 500; // bakış sürerken oyun başlamaz
   pk.timer = setTimeout(function () { endPeek(r, seat, 'time'); }, PEEK_MS);
-  send(me.ws, { t: 'peek', target: rotateIdx(target, seat), charges: r.charges[seat], free: seatFree(me, 'bak'), paid: seatPaid(me, 'bak'), usedFree: usedFree, usedPaid: usedPaid, left: PEEK_MS, hand: g.players[target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }) }); // taşlar sadece bakana
+  var blur = 0, tg = r.seats[target], nz = Economy.actionSkin('nazar'); // v9.92 (K117) Nazar Boncuğu: hedef sahipse (ya da denemesi varsa) bakan ilk 2 sn bulanık görür; elde 1
+  if (tg && !tg.bot && nz) { r.actUsed = r.actUsed || [{}, {}, {}, {}]; var nUsed = r.actUsed[target].nazar || 0, nOwn = (tg.actions || []).indexOf('nazar') >= 0, nTrial = !nOwn && seatFree(tg, 'nazar') > 0;
+    if (nUsed < (nz.perHand || 1) && (nOwn || nTrial)) { blur = nz.blurMs || 2000; r.actUsed[target].nazar = nUsed + 1;
+      if (nTrial) { tg.free.nazar = 0; if (tg.acc) Accounts.grant(tg.acc, function (p) { Accounts.useFreeSkin(p, 'nazar'); return {}; }, function (e, out, view) { if (!e && tg.ws && tg.ws.readyState === 1) send(tg.ws, { t: 'me', player: view }); }); }
+      r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'skinFx', skin: 'nazar', from: rotateIdx(target, i), target: null }); }); } }
+  send(me.ws, { t: 'peek', target: rotateIdx(target, seat), charges: r.charges[seat], free: seatFree(me, 'bak'), paid: seatPaid(me, 'bak'), usedFree: usedFree, usedPaid: usedPaid, left: PEEK_MS, blur: blur, hand: g.players[target].hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; }) }); // taşlar sadece bakana
   r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && i !== seat) send(s.ws, { t: 'peekAnim', from: rotateIdx(seat, i), target: rotateIdx(target, i), left: PEEK_MS }); });
   var ts = r.seats[target];
   if (ts.bot || !ts.ws || ts.ws.readyState !== 1) { if (Math.random() < 0.45) pk.botTimer = setTimeout(function () { if (r.peeks[seat] === pk) endPeek(r, seat, 'slap'); }, 1500 + Math.random() * 5000); }
@@ -208,13 +213,20 @@ function handlePeek(r, seat, m) {
 function handleSkinUse(r, seat, m) { // v9.91 (K116): aksiyon skini — sahiplik/deneme, aşama ve el sınırı sunucuda; kabul edilince herkese 'skinFx'
   var g = r.g; if (!g) throw new Error('oyun başlamadı');
   var id = String(m.skin || ''), def = Economy.actionSkin(id); if (!def) throw new Error('Bilinmeyen skin.');
-  if (def.cat === 'open') throw new Error('Mühür açılışta kendiliğinden oynar.');
+  if (def.cat === 'open' || def.cat === 'discard' || def.cat === 'guard' || def.cat === 'end') throw new Error(def.name + ' kendiliğinden oynar.'); // v9.92: otomatik skinler istekle kullanılmaz
   var me = r.seats[seat]; r.actUsed = r.actUsed || [{}, {}, {}, {}]; var used = r.actUsed[seat][id] || 0;
   if (def.perHand && used >= def.perHand) throw new Error('Bu elde ' + def.name + ' hakkın bitti.');
   var owned = (me.actions || []).indexOf(id) >= 0, trial = !owned && seatFree(me, id) > 0;
   if (!owned && !trial) throw new Error(def.name + ' için hakkın yok: mağazadan al ya da karakterle aç.');
   var target = null, now = Date.now();
   if (def.cat === 'prep') { if (!r.prepUntil || now >= r.prepUntil) throw new Error('Çay Servisi yalnız el başı hazırlıkta.'); }
+  var info = null;
+  if (def.cat === 'info') { // v9.92 (K117) Yoklama: bilgi skini — hazırlıkta, ligde kapalı, yalnız isteyene renk dağılımı (okey/sahte okey sayılmaz)
+    if (r.league && Economy.CONFIG.league.peekOff) throw new Error('Lig maçında Yoklama kapalı: herkes eşit şartlarda oynar.');
+    if (!r.prepUntil || now >= r.prepUntil) throw new Error('Yoklama yalnız el başı hazırlıkta.');
+    target = (parseInt(m.target) + seat) % 4; if (isNaN(target) || target === seat || target < 0 || target > 3) throw new Error('geçersiz hedef');
+    var cnt = [0, 0, 0, 0]; g.players[target].hand.forEach(function (t) { if (t.fake || Okey.isJoker(t, g.ok)) return; cnt[t.c]++; }); info = cnt;
+  }
   if (def.cat === 'react') {
     var slap = (r.lastSlap || {})[seat], open = r.lastOpen, win = def.windowMs || 5000, cands = [];
     if (slap && now - slap.at <= win) cands.push(slap.by); if (open && open.seat !== seat && now - open.at <= win) cands.push(open.seat);
@@ -224,7 +236,8 @@ function handleSkinUse(r, seat, m) { // v9.91 (K116): aksiyon skini — sahiplik
   }
   r.actUsed[seat][id] = used + 1;
   if (trial) { me.free[id] = 0; if (me.acc) Accounts.grant(me.acc, function (p) { Accounts.useFreeSkin(p, id); return {}; }, function (e, out, view) { if (!e && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'me', player: view }); }); }
-  r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'skinFx', skin: id, from: rotateIdx(seat, i), target: target != null ? rotateIdx(target, i) : null, trial: trial && i === seat }); });
+  r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'skinFx', skin: id, from: rotateIdx(seat, i), target: (target != null && def.cat !== 'info') ? rotateIdx(target, i) : null, trial: trial && i === seat }); }); // bilgi skininde hedef herkese söylenmez
+  if (info && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'skinInfo', skin: id, target: rotateIdx(target, seat), counts: info }); // yalnız isteyene
   log(r, (me.name || '?') + ' ' + def.name + (target != null ? ' → ' + (r.seats[target] ? r.seats[target].name : target) : ''));
 }
 function handleSlap(r, seat, m) {
@@ -680,7 +693,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.91. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.92. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });

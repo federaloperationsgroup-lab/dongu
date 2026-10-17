@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    version: 'dongu-economy-1.8',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
+    version: 'dongu-economy-1.9',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -58,7 +58,7 @@
       'dg24_ust-gece-kimono': 20, 'dg24_aks-gezgin-dugumu': 20,
       'dg24_sac-orgu-taci': 25, 'dg24_biyik-kivrik-usta': 25,
       'dg24_ust-mercan-ritim': 30, 'dg24_aks-zaman-halkasi': 30,
-      'c_ordek': 5, 'c_palyaco': 15, 'c_fikret': 3, 'c_sakir': 12                      // v9.88 (K110): özel karakterler (aşağıdaki characters ile aynı)
+      'c_ordek': 5, 'c_palyaco': 15, 'c_fikret': 3, 'c_sakir': 12, 'c_pamuk': 6, 'c_nine': 8, 'c_muhtar': 10                      // v9.88 (K110): özel karakterler (aşağıdaki characters ile aynı)
     },
     // v9.88 (K110): özel karakter kataloğu — tek kaynak (mağaza, sunucu satın alma, haklar). Fiyat tahmini: G ≈ her gün 6 El oynayan oyuncunun
     // günlük altını ≈ 450 (economy kurallarından hesap, canlı veri değil) → Ördek ≈ 2G, Palyaço > 4 Masa Giriş Skininin toplamı (6.000) ≈ 14G.
@@ -68,14 +68,21 @@
       { id: 'c_ordek', level: 5, price: 900, grants: ['ortayi_kokla'], allSkins: false, futureSkins: false },
       { id: 'c_palyaco', level: 15, price: 6500, grants: ['tersten_el', 'ince_ayar', 'gosterissiz_numara', 'ortayi_kokla'], allSkins: true, futureSkins: false },
       { id: 'c_fikret', level: 3, price: 500, grants: ['cay_servisi'], allSkins: false, futureSkins: false }, // v9.90 (K115) Çaycı Fikret; v9.91 (K116): Çay Servisi ücretsiz
-      { id: 'c_sakir', level: 12, price: 4000, grants: ['gosterissiz_numara', 'tos'], allSkins: false, futureSkins: false } // v9.90 (K115) Keçi Şakir; v9.91 (K116): Tos ücretsiz
+      { id: 'c_sakir', level: 12, price: 4000, grants: ['gosterissiz_numara', 'tos'], allSkins: false, futureSkins: false }, // v9.90 (K115) Keçi Şakir; v9.91 (K116): Tos ücretsiz
+      { id: 'c_pamuk', level: 6, price: 1200, grants: ['patili'], allSkins: false, futureSkins: false }, // v9.92 (K117): Kedi Pamuk — Patili Dokunuş
+      { id: 'c_nine', level: 8, price: 1800, grants: ['ince_ayar', 'nazar'], allSkins: false, futureSkins: false }, // v9.92 (K117): Dedikoducu Nine — İnce Ayar + Nazar Boncuğu
+      { id: 'c_muhtar', level: 10, price: 2800, grants: ['tersten_el', 'muhur'], allSkins: false, futureSkins: false } // v9.92 (K117): Muhtar Bey — Tersten El + Mühür
     ],
     bakMaxCharges: 5,
     // v9.91 (K116): aksiyon skinleri — maç içi gösteri (bilgi vermez, derecelide serbest). Palyaço'nun allSkins'i yalnız Masa Giriş Skinlerini kapsar (K110: sonradan eklenenler dahil değil).
     actionSkins: [
       { id: 'cay_servisi', name: 'Çay Servisi', price: 1500, cat: 'prep', perHand: 1 },
       { id: 'muhur', name: 'Mühür', price: 1500, cat: 'open', perHand: 1 },
-      { id: 'tos', name: 'Tos', price: 1500, cat: 'react', perHand: 2, windowMs: 5000 }
+      { id: 'tos', name: 'Tos', price: 1500, cat: 'react', perHand: 2, windowMs: 5000 },
+      { id: 'patili', name: 'Patili Dokunuş', price: 1500, cat: 'discard', perHand: 3 }, // v9.92 (K117): taş atınca pati izi (kendiliğinden)
+      { id: 'nazar', name: 'Nazar Boncuğu', price: 1500, cat: 'guard', perHand: 1, blurMs: 2000 }, // v9.92: sana bakanın görüşü 2 sn bulanık (pasif)
+      { id: 'yoklama', name: 'Yoklama', price: 1200, cat: 'info', perHand: 1, showMs: 4000, rankedOff: true }, // v9.92: rakibin renk dağılımı (bilgi; ligde kapalı)
+      { id: 'zafer', name: 'Zafer Turu', price: 2000, cat: 'end', perHand: 1 } // v9.92: maç birincisine konfeti (kendiliğinden)
     ],                        // Çaktırmadan Bak: el başına en çok hak (K5)
     // Çaktırmadan Bak kullanım paketleri (tüketilebilir; hesapta skinUses.bak). Sıra: el hakkı (skin/karakter) → ücretsiz deneme → satın alınmış kullanım.
     skinUses: [
