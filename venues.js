@@ -160,6 +160,8 @@ function listPublic(limit) { return Object.keys(mem).map(function (k) { return m
 function handleHttp(url, body, cb) {
   if (url.indexOf('/api/venue/') !== 0) return false;
   var op = url.slice('/api/venue/'.length), now = Date.now();
+  Accounts.withLock(body && body.id, function (release) { // v9.86: oyuncu kaydı hesap kilidi altında okunup yazılır (eşzamanlı ödül yazımı silinmesin)
+  var cb0 = cb; cb = function (e, out) { release(); cb0(e, out); };
   Accounts.auth(body, function (e, p) {
     if (e) return cb(e);
     try {
@@ -182,6 +184,7 @@ function handleHttp(url, body, cb) {
       // oyuncu kaydı değiştiyse (deposit/order) kaydet
       Accounts.save(p, function () { out.player = Accounts.publicView(p); cb(null, out); });
     } catch (ex) { cb(ex); }
+  });
   });
   return true;
 }

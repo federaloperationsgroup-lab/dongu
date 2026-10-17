@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    version: 'dongu-economy-1.3',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları)
+    version: 'dongu-economy-1.5',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -33,6 +33,44 @@
       { id: 'usta', name: 'Usta', entry: 100000, level: 35, locked: true },
       { id: 'efsane', name: 'Efsane', entry: 500000, level: 40, locked: true }
     ],
+    // v9.86 (K107, D6): mekânlar seviye + oynama hedefiyle açılır; açılan mekân hesapta kalır (eşik sonradan yükselse de kapanmaz).
+    // hands: toplam oynanan el (bot masası dahil) · real: gerçek oyuncularla uygun el (masada en az 2 uygun insan; günlük görevlerdeki "uygun el" ile aynı)
+    arenas: [
+      { theme: 'koy', level: 1 },
+      { theme: 'kahve', level: 2, hands: 6 },
+      { theme: 'sokak', level: 3, hands: 12 },
+      { theme: 'sanayi', level: 5, real: 6 },
+      { theme: 'cinar', level: 7, real: 18 },
+      { theme: 'soba', level: 9, real: 30 },
+      { theme: 'apartman', level: 11, real: 48 },
+      { theme: 'bag', level: 13, real: 72 },
+      { theme: 'kor', level: 16, real: 100 },
+      { theme: 'gok', level: 19, real: 140 },
+      { theme: 'inci', level: 22, real: 190 },
+      { theme: 'kok', level: 26, real: 250 },
+      { theme: 'yildiz', level: 30, real: 320 }
+    ],
+    // v9.86 (K107): seviyeyle açılan kostümler — bu seviyeden önce satın alınamaz (fiyat aynı; önceden alınmış olan sende kalır)
+    itemLevels: {
+      'dg24_sac-kivilcim-dalga': 5, 'dg24_aks-erik-kasket': 5,
+      'dg24_ust-gunes-dikisi': 10, 'dg24_sakal-kaptan-capa': 10,
+      'dg24_sac-bulut-bukle': 15, 'dg24_alt-kanyon-kargo': 15,
+      'dg24_ust-gece-kimono': 20, 'dg24_aks-gezgin-dugumu': 20,
+      'dg24_sac-orgu-taci': 25, 'dg24_biyik-kivrik-usta': 25,
+      'dg24_ust-mercan-ritim': 30, 'dg24_aks-zaman-halkasi': 30
+    },
+    // v9.87 (K108) lig — basit sürüm (K95): ayrı kuyruk yok; en az 3 gerçek oyunculu Hızlı Katıl (Sosyal, girişsiz) maçı "lig maçı"dır.
+    // Maç sonu sıraya göre Döngü Puanı (1.–4.; hükmen/ayrılan 4.) × el sayısı katsayısı × rakip gücü; puan 0'ın altına düşmez; aylık sezon (UTC ayı).
+    // Aynı oyuncu grubuyla günde en çok 3 maç puanlanır. Miktarlar ilk sürüm: canlı veriyle ayarlanacak. Altın/XP vermez (ekonomiye dokunmaz).
+    league: {
+      base: [20, 8, -8, -20],               // sıraya göre (6 El için)
+      handsMult: { 1: 0.25, 6: 1, 12: 1.5 }, // 1 El: ±5/±2 · 6 El: ±20/±8 · 12 El: ±30/±12
+      minHumans: 3,
+      sameGroupDaily: 3,
+      strength: { per: 200, slope: 0.25, min: 0.75, max: 1.25 }, // rakiplerin ortalaması 200 puan yüksekse kazanç ×1,25, kayıp ×0,75 (tersi de)
+      peekOff: true,                        // D7: lig maçında Çaktırmadan Bak kapalı (bilgi avantajı)
+      top: 50, pastSeasons: 12
+    },
     stakeFeeBps: 500,                       // havuzun %5'i sistem gideri
     stakePayoutBps: [6500, 3500, 0, 0],     // kalan havuz: 1. %65, 2. %35
     venue: {
@@ -257,8 +295,9 @@
     lines.push('El ödülü (' + rankTxt + (rw.coef < 1 ? ', ' + opts.humans + ' insan ×' + fmt(rw.coef) : '') + (rw.rate < 1 ? (rw.rate ? ', günlük %25 bant' : ', günlük sınır doldu') : '') + '): +' + rw.gold + ' altın · +' + rw.xp + ' XP');
     var quests = questCheck(e, p, lines);
     var lu = levelUps(p, e); if (lu) lines.push('Seviye ' + lu.to + '! +' + lu.gold + ' altın');
-    if (p.stats) { p.stats.hands = (p.stats.hands || 0) + 1; }
-    return { gold: rw.gold, xp: rw.xp, coef: rw.coef, rate: rw.rate, dayHands: e.hands, quests: quests, levelUp: lu, lines: lines, training: false };
+    if (p.stats) { if (p.stats.real == null) p.stats.real = p.stats.hands || 0; p.stats.hands = (p.stats.hands || 0) + 1; p.stats.real += 1; } // real (v9.86): gerçek oyuncularla uygun el (mekân hedefi); eski kayıtta önce geçmiş eller sayılır
+    var ar = syncArenas(p); ar.forEach(function (t) { lines.push('Yeni mekân açıldı: ' + arenaName(t) + '!'); });
+    return { gold: rw.gold, xp: rw.xp, coef: rw.coef, rate: rw.rate, dayHands: e.hands, quests: quests, levelUp: lu, lines: lines, training: false, arenas: ar };
   }
   function settleTraining(p, opts, now) { // tek insan (botlara karşı): günde ilk 5 el 4 altın 10 XP; sıralama bonusu yok
     var e = econOf(p, now), lines = [], t = CONFIG.training, gold = 0, xp = 0;
@@ -267,7 +306,8 @@
     else lines.push('Antrenman eli: günlük ' + t.handsPerDay + ' el ödülü doldu');
     var lu = levelUps(p, e); if (lu) lines.push('Seviye ' + lu.to + '! +' + lu.gold + ' altın');
     if (p.stats) p.stats.hands = (p.stats.hands || 0) + 1;
-    return { gold: gold, xp: xp, coef: 0, rate: e.training <= t.handsPerDay ? 1 : 0, dayHands: e.hands || 0, quests: [], levelUp: lu, lines: lines, training: true, trainingCount: e.training };
+    var ar = syncArenas(p); ar.forEach(function (th) { lines.push('Yeni mekân açıldı: ' + arenaName(th) + '!'); });
+    return { gold: gold, xp: xp, coef: 0, rate: e.training <= t.handsPerDay ? 1 : 0, dayHands: e.hands || 0, quests: [], levelUp: lu, lines: lines, training: true, trainingCount: e.training, arenas: ar };
   }
   // maç tamamlama bonusu: maçın bütün ellerine uygun katılan; katsayı = ellerin katsayı×bant ortalaması
   function settleMatch(p, opts, now) { // {totalHands, eligibleHands, factors:[coef*rate...], rank, won}
@@ -281,6 +321,7 @@
     }
     if (p.stats) { p.stats.matches = (p.stats.matches || 0) + 1; if (opts.rank === 1) p.stats.wins = (p.stats.wins || 0) + 1; }
     out.levelUp = levelUps(p, e); if (out.levelUp) lines.push('Seviye ' + out.levelUp.to + '! +' + out.levelUp.gold + ' altın');
+    out.arenas = syncArenas(p); out.arenas.forEach(function (t) { lines.push('Yeni mekân açıldı: ' + arenaName(t) + '!'); });
     return out;
   }
   function loginReward(p, now) { // günlük giriş: UTC günü başına bir kez
@@ -292,7 +333,84 @@
     if (p.tutorialRewarded) return null; p.tutorialRewarded = true;
     var e = econOf(p, now); p.coins = (p.coins || 0) + CONFIG.tutorial.gold; p.xp = (p.xp || 0) + CONFIG.tutorial.xp;
     var lu = levelUps(p, e);
-    return { gold: CONFIG.tutorial.gold, xp: CONFIG.tutorial.xp, levelUp: lu };
+    return { gold: CONFIG.tutorial.gold, xp: CONFIG.tutorial.xp, levelUp: lu, arenas: syncArenas(p) };
+  }
+  // ---------- mekânlar (v9.86, K107): seviye + oynama hedefi ----------
+  var ARENA_NAMES = { koy: 'Köy Meydanı', kahve: 'Köy Kahvesi', sokak: 'Ara Sokak', sanayi: 'Sanayi Çay Ocağı', cinar: 'Çınar Altı', soba: 'Sobalı Kış Kahvesi', apartman: 'Apartman Önü', bag: 'Bağ Evi Verandası', kor: 'Kor Sahanlığı', gok: 'Gök Köprüsü', inci: 'İnci Koyu', kok: 'Kök Çardağı', yildiz: 'Yıldız İskelesi' };
+  function arenaName(theme) { return ARENA_NAMES[theme] || theme; }
+  function arenaRule(theme) { for (var i = 0; i < CONFIG.arenas.length; i++) if (CONFIG.arenas[i].theme === theme) return CONFIG.arenas[i]; return null; }
+  function arenaProgress(p, theme) { // {level, hands, real: {have, need}, met, open}; p: hesap kaydı ya da cihazdaki kayıt ({xp, stats, arenas})
+    var r = arenaRule(theme), st = (p && p.stats) || {}, lv = levelOf((p && p.xp) || 0).level;
+    if (!r) return { level: { have: lv, need: 1 }, hands: null, real: null, met: true, open: true };
+    var o = { level: { have: lv, need: r.level || 1 }, hands: r.hands ? { have: st.hands || 0, need: r.hands } : null, real: r.real ? { have: st.real || 0, need: r.real } : null };
+    o.met = o.level.have >= o.level.need && (!o.hands || o.hands.have >= o.hands.need) && (!o.real || o.real.have >= o.real.need);
+    o.open = o.met || !!(p && p.arenas && p.arenas.indexOf(theme) >= 0);
+    return o;
+  }
+  function arenaOpen(p, theme) { return arenaProgress(p, theme).open; }
+  function syncArenas(p) { // koşulu sağlanan mekânlar hesaba yazılır (bir kez açılan kapanmaz); dönüş: yeni açılanlar
+    if (!p) return [];
+    if (!p.arenas) p.arenas = ['koy'];
+    if (p.stats && p.stats.real == null) p.stats.real = p.stats.hands || 0; // v9.86 geçişi: eski kayıtlarda gerçek oyuncu eli ayrı tutulmuyordu → geçmiş eller sayılır
+    var out = [];
+    CONFIG.arenas.forEach(function (r) { if (p.arenas.indexOf(r.theme) < 0 && arenaProgress(p, r.theme).met) { p.arenas.push(r.theme); out.push(r.theme); } });
+    return out;
+  }
+  function itemLevel(id) { return CONFIG.itemLevels[id] || 0; }
+  // ---------- lig (v9.87, K108): Döngü Puanı, aylık sezon ----------
+  var AYLAR = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+  function seasonKey(ts) { var d = new Date(ts == null ? Date.now() : ts); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1); }
+  function seasonLabel(key) { var p = String(key || '').split('-'), m = parseInt(p[1], 10); return (AYLAR[m - 1] || '?') + ' ' + (p[0] || '?'); }
+  function seasonEndsAt(ts) { var d = new Date(ts == null ? Date.now() : ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); }
+  function prevSeasonKey(ts) { var d = new Date(ts == null ? Date.now() : ts); return seasonKey(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)); }
+  function leagueOf(p, now) { // hesabın lig kaydı; sezon değişince eski sezon arşive (son 12), puan sıfırdan
+    var sk = seasonKey(now);
+    if (!p.league) p.league = { season: sk, points: 0, matches: 0, wins: 0, best: 0, past: [] };
+    var L = p.league;
+    if (L.season !== sk) {
+      if (L.matches) L.past = (L.past || []).concat([{ season: L.season, points: L.points, matches: L.matches, wins: L.wins || 0 }]).slice(-CONFIG.league.pastSeasons);
+      L.season = sk; L.points = 0; L.matches = 0; L.wins = 0; L.best = 0; L.groups = null;
+    }
+    if (!L.past) L.past = [];
+    return L;
+  }
+  function leaguePoints(p, now) { var L = p && p.league; return L && L.season === seasonKey(now) ? (L.points || 0) : 0; } // okuma (kaydı değiştirmez)
+  function leagueBase(ranks, me, forfeits) { // sıraya göre taban puan; eşit sırada konumların ortalaması; hükmen son her zaman 4.
+    var B = CONFIG.league.base; forfeits = forfeits || [];
+    if (forfeits[me]) return B[3];
+    var r = ranks[me], tied = 0, better = 0;
+    for (var i = 0; i < ranks.length; i++) { if (forfeits[i]) continue; if (ranks[i] === r) tied++; else if (ranks[i] < r) better++; }
+    var sum = 0; for (var k = 0; k < tied; k++) sum += B[Math.min(3, better + k)];
+    return sum / tied;
+  }
+  function leagueDelta(myPts, oppPts, base, totalHands) {
+    var C = CONFIG.league, m = C.handsMult[totalHands] || 1, st = C.strength;
+    var avg = oppPts && oppPts.length ? oppPts.reduce(function (s, x) { return s + (x || 0); }, 0) / oppPts.length : myPts;
+    var diff = (avg - myPts) / st.per, f = base > 0 ? 1 + diff * st.slope : 1 - diff * st.slope;
+    f = Math.max(st.min, Math.min(st.max, f));
+    return { delta: Math.round(base * m * f), mult: m, factor: f };
+  }
+  // Lig maçı sonu (sunucu, her gerçek oyuncu için). opts: {ranks, me, forfeits, totalHands, oppPts:[rakip insanların puanı], group:'kimlikler'}
+  // dönüş: {counted, delta, points, rank1, lines}
+  function settleLeague(p, opts, now) {
+    var L = leagueOf(p, now), day = dayKey(now), lines = [], C = CONFIG.league, lab = seasonLabel(L.season);
+    if (!L.groups || L.groups.day !== day) L.groups = { day: day, n: {} };
+    var g = String(opts.group || ''), used = L.groups.n[g] || 0;
+    if (used >= C.sameGroupDaily) { lines.push('Lig: bu oyuncularla bugün ' + C.sameGroupDaily + ' maç puanlandı; bu maç puansız (' + lab + ')'); return { counted: false, delta: 0, points: L.points, lines: lines }; }
+    L.groups.n[g] = used + 1;
+    var ff = !!(opts.forfeits && opts.forfeits[opts.me]), base = leagueBase(opts.ranks, opts.me, opts.forfeits);
+    var d = leagueDelta(L.points, opts.oppPts || [], base, opts.totalHands), before = L.points;
+    L.points = Math.max(0, L.points + d.delta); L.matches = (L.matches || 0) + 1;
+    var first = !ff && opts.ranks[opts.me] === 1; if (first) L.wins = (L.wins || 0) + 1;
+    if (L.points > (L.best || 0)) L.best = L.points;
+    var real = L.points - before;
+    lines.push('Döngü Puanı: ' + (real >= 0 ? '+' : '−') + Math.abs(real) + ' → ' + L.points + ' (' + lab + ' sezonu' + (ff ? ', hükmen son' : '') + ')');
+    return { counted: true, delta: real, points: L.points, lines: lines };
+  }
+  function leagueSummary(p, now) { // arayüz: bu sezonun özeti (kaydı değiştirmez)
+    var sk = seasonKey(now), L = p && p.league, cur = L && L.season === sk;
+    var past = ((L && L.past) || []).slice(); if (L && !cur && L.matches) past.push({ season: L.season, points: L.points, matches: L.matches, wins: L.wins || 0 });
+    return { season: sk, label: seasonLabel(sk), endsAt: seasonEndsAt(now), points: cur ? L.points || 0 : 0, matches: cur ? L.matches || 0 : 0, wins: cur ? L.wins || 0 : 0, best: cur ? L.best || 0 : 0, last: past.length ? past[past.length - 1] : null };
   }
   function summary(p, now) { // arayüz: bugünkü durum
     var e = econOf(p, now), lv = levelOf(p.xp || 0);
@@ -323,5 +441,5 @@
     return { total: total, fee: fee, net: net, shares: shares, undistributed: 0 };
   }
 
-  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps };
+  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps, arenaName: arenaName, arenaRule: arenaRule, arenaProgress: arenaProgress, arenaOpen: arenaOpen, syncArenas: syncArenas, itemLevel: itemLevel, seasonKey: seasonKey, seasonLabel: seasonLabel, seasonEndsAt: seasonEndsAt, prevSeasonKey: prevSeasonKey, leagueOf: leagueOf, leaguePoints: leaguePoints, leagueBase: leagueBase, leagueDelta: leagueDelta, settleLeague: settleLeague, leagueSummary: leagueSummary };
 }));
