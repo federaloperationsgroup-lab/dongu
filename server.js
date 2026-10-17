@@ -31,7 +31,7 @@ function newRoom() {
 }
 // seat: { name, avatar, bot:boolean, token, ws|null, connected }
 function seatInfo(r) {
-  return r.seats.map(function (s, i) { return s ? { i: i, name: s.name, avatar: s.avatar, bot: !!s.bot, connected: !!(s.bot || (s.ws && s.ws.readyState === 1)), prof: s.prof || null } : null; }); // prof (v9.74): seviye, maç/galibiyet, kostüm sayısı, kıraathane adı — profil kartı için
+  return r.seats.map(function (s, i) { return s ? { i: i, name: s.name, avatar: s.avatar, bot: !!s.bot, connected: !!(s.bot || (s.ws && s.ws.readyState === 1)), prof: s.prof || null, actions: s.actions || [] } : null; }); // actions (v9.91): koltuğun aksiyon skinleri (Mühür açılışta herkeste oynar) // prof (v9.74): seviye, maç/galibiyet, kostüm sayısı, kıraathane adı — profil kartı için
 }
 function freeSeat(r) { for (var i = 0; i < 4; i++) if (!r.seats[i]) return i; return -1; }
 function transferHost(r) { // v9.75: kurucu başlamadan ayrıldı → yetki (bağlı olan) sıradaki insana; yoksa herhangi bir insana
@@ -163,6 +163,7 @@ function seatEligible(r, i, now) { // uygun insan eli: bağlı süre ≥ %70 ve 
 function beginPrep(r) {
   beginHandStats(r);
   r.charges = r.seats.map(function (s) { return s && !s.bot ? Math.min(MAX_SKINS, Math.max(0, parseInt(s.skins) || 0)) : 0; }); // her elde yenilenir, birikmez
+  r.actUsed = [{}, {}, {}, {}]; r.lastSlap = {}; r.lastOpen = null; // v9.91 (K116): aksiyon skini el sayaçları ve tos pencereleri
   r.peeks = {}; r.prepDone = {};
   // Hazırlık/hazır olma aşaması: masada bağlı bir insan varsa her el başında en çok PREP_MS; bütün insanlar "Oyuna geç" deyince (prepDone) erken biter.
   // (v9.64: önceden yalnız bakış hakkı olan varsa açılıyordu; açıklama penceresi okunurken botlar oynamaya başlıyordu.)
@@ -204,11 +205,34 @@ function handlePeek(r, seat, m) {
   if (ts.bot || !ts.ws || ts.ws.readyState !== 1) { if (Math.random() < 0.45) pk.botTimer = setTimeout(function () { if (r.peeks[seat] === pk) endPeek(r, seat, 'slap'); }, 1500 + Math.random() * 5000); }
   log(r, me.name + ' ' + ts.name + "'in eline bakıyor"); markRoom(r); // v9.85: kullanılan hak kayda geçsin
 }
+function handleSkinUse(r, seat, m) { // v9.91 (K116): aksiyon skini — sahiplik/deneme, aşama ve el sınırı sunucuda; kabul edilince herkese 'skinFx'
+  var g = r.g; if (!g) throw new Error('oyun başlamadı');
+  var id = String(m.skin || ''), def = Economy.actionSkin(id); if (!def) throw new Error('Bilinmeyen skin.');
+  if (def.cat === 'open') throw new Error('Mühür açılışta kendiliğinden oynar.');
+  var me = r.seats[seat]; r.actUsed = r.actUsed || [{}, {}, {}, {}]; var used = r.actUsed[seat][id] || 0;
+  if (def.perHand && used >= def.perHand) throw new Error('Bu elde ' + def.name + ' hakkın bitti.');
+  var owned = (me.actions || []).indexOf(id) >= 0, trial = !owned && seatFree(me, id) > 0;
+  if (!owned && !trial) throw new Error(def.name + ' için hakkın yok: mağazadan al ya da karakterle aç.');
+  var target = null, now = Date.now();
+  if (def.cat === 'prep') { if (!r.prepUntil || now >= r.prepUntil) throw new Error('Çay Servisi yalnız el başı hazırlıkta.'); }
+  if (def.cat === 'react') {
+    var slap = (r.lastSlap || {})[seat], open = r.lastOpen, win = def.windowMs || 5000, cands = [];
+    if (slap && now - slap.at <= win) cands.push(slap.by); if (open && open.seat !== seat && now - open.at <= win) cands.push(open.seat);
+    if (!cands.length) throw new Error('Tos için pencere kapalı: tokat yedikten ya da rakip açıldıktan sonra 5 sn.');
+    target = m.target != null ? (parseInt(m.target) + seat) % 4 : cands[0];
+    if (cands.indexOf(target) < 0) throw new Error('Tos hedefi: sana tokat atan ya da son açılan rakip.');
+  }
+  r.actUsed[seat][id] = used + 1;
+  if (trial) { me.free[id] = 0; if (me.acc) Accounts.grant(me.acc, function (p) { Accounts.useFreeSkin(p, id); return {}; }, function (e, out, view) { if (!e && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'me', player: view }); }); }
+  r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'skinFx', skin: id, from: rotateIdx(seat, i), target: target != null ? rotateIdx(target, i) : null, trial: trial && i === seat }); });
+  log(r, (me.name || '?') + ' ' + def.name + (target != null ? ' → ' + (r.seats[target] ? r.seats[target].name : target) : ''));
+}
 function handleSlap(r, seat, m) {
   var from = (parseInt(m.from) + seat) % 4, pk = r.peeks[from];
   if (!pk || pk.target !== seat) throw new Error('Sana bakan yok.');
   if (Date.now() >= pk.until) throw new Error('Süre doldu.');
   endPeek(r, from, 'slap');
+  r.lastSlap = r.lastSlap || {}; r.lastSlap[from] = { by: seat, at: Date.now() }; // v9.91: tokat yiyen, 5 sn içinde tokatlayana tos atabilir
 }
 // Koltuğa oturan oyuncunun Masa Giriş Skini: yalnızca hesabında sahip olduğu skin herkese gösterilir (hesapsız istemcide skin yok)
 function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Skini sahipliği ve Çaktırmadan Bak hakkı istemcinin beyanına değil hesaba göre
@@ -216,7 +240,7 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   if (!s.acc) { s.skins = 0; if (s.avatar) delete s.avatar.intro; return; }
   Accounts.auth(s.acc, function (e, p) {
     if (e || !p) { s.skins = 0; s.free = null; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
-    s.skins = Accounts.introCount(p);
+    s.skins = Accounts.introCount(p); s.actions = Accounts.ownedActions(p); // v9.91 (K116)
     var vn = Venues.ofOwner(p.id); s.prof = { level: Accounts.levelOf(p.xp).level, matches: (p.stats && p.stats.matches) || 0, wins: (p.stats && p.stats.wins) || 0, owned: (p.owned || []).length, venue: vn ? vn.name : null, venueTier: vn ? vn.tier : null, arenas: Economy.CONFIG.arenas.filter(function (a) { return Economy.arenaOpen(p, a.theme); }).length, lp: Economy.leaguePoints(p, Date.now()) }; // v9.74 profil kartı (v9.86: açık mekân sayısı · v9.87: bu sezonun Döngü Puanı)
     s.venue = vn ? { code: vn.code, name: vn.name, tier: vn.tier, tierName: Economy.venueTier(vn.tier).name } : null; // v9.76 ev sahibi kartı için
     if (Accounts.ensureSkinGift(p)) Accounts.grant(s.acc, function (q) { Accounts.ensureSkinGift(q); return {}; }); // v9.86: yazma hesap kilidi altında (eşzamanlı ödülü silmesin)
@@ -656,7 +680,7 @@ Accounts.route('/api/venue/', Venues.handleHttp);
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.89. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.91. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/olcum') { Accounts.matchSummary(function (e, out) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(out, null, 1)); }); return; } // v9.76: görev başına açılma, el uzunluğu, bitiş türleri, çarpan; maç tamamlama ve rövanş oranı
   if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
     var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, stake: q.settings.stake || 'sosyal', entry: q.settings.entry || 0, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
@@ -838,12 +862,14 @@ function handle(ws, me, m) {
     if (r.prepUntil && Object.keys(r.peeks || {}).length) throw new Error('Bakış sürerken hamle yapılamaz.');
     var res = handleAct(r, me.seat, m);
     partOf(r, me.seat).acts++; if (r.actsAll) r.actsAll[me.seat]++;
+    if (m.kind === 'open') r.lastOpen = { seat: me.seat, at: Date.now() }; // v9.91: rakipler 5 sn içinde tos atabilir
     broadcastState(r, { event: 'act', actor: me.seat, kind: m.kind, result: res });
     rewardIfOver(r);
     scheduleBots(r);
     return;
   }
   if (m.t === 'peek') { handlePeek(r, me.seat, m); return; }
+  if (m.t === 'skinUse') { handleSkinUse(r, me.seat, m); return; } // v9.91 (K116)
   if (m.t === 'slap') { handleSlap(r, me.seat, m); return; }
   if (m.t === 'prepDone') { // bütün insan oyuncular "Oyuna geç" dediyse ve bakış yoksa hazırlık biter, botlar başlar
     if (!r.prepDone) r.prepDone = {}; r.prepDone[me.seat] = true;

@@ -105,8 +105,18 @@ function cleanCosmetics(p, av) {
 
 // Skin hediyesi (8 Ekim 2026): her hesaba BİR KEZ, her skinden 1 ücretsiz kullanım — Çaktırmadan Bak ('bak') + katalogdaki Masa Giriş Skinleri (val).
 // Satın alımları, dolabı ve K5 hak kuralını (sahip olunan skin → el başına hak) değiştirmez; yalnız bir kerelik ek haktır. Giriş/yenileme/yeniden açılış tekrar vermez (skinGift damgası).
-function skinIds() { var ids = ['bak']; Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (c.cat === 'intro' && ids.indexOf(c.val) < 0) ids.push(c.val); }); return ids; }
-function ensureSkinGift(p) { if (p.skinGift) return false; p.freeSkins = {}; skinIds().forEach(function (id) { p.freeSkins[id] = 1; }); p.skinGift = Date.now(); p.skinGiftNew = true; return true; }
+function skinIds() { var ids = ['bak']; Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if ((c.cat === 'intro' || c.cat === 'action') && ids.indexOf(c.val) < 0) ids.push(c.val); }); return ids; } // v9.91: aksiyon skinleri de (1 deneme)
+function ensureSkinGift(p) { if (p.skinGift) return ensureNewSkinTrials(p); p.freeSkins = {}; skinIds().forEach(function (id) { p.freeSkins[id] = 1; }); p.skinGift = Date.now(); p.skinGiftNew = true; return true; }
+function ensureNewSkinTrials(p) { // v9.91 (K116): sonradan eklenen skinler için eski hesaplara da 1 deneme (bildirim yok)
+  var ch = false; p.freeSkins = p.freeSkins || {}; p.trialSeen = p.trialSeen || {};
+  skinIds().forEach(function (id) { if (!(id in p.freeSkins) && !p.trialSeen[id]) { p.freeSkins[id] = 1; p.trialSeen[id] = 1; ch = true; } });
+  return ch;
+}
+function ownedActions(p) { // sahip olunan (satın alınmış ya da karakterle açılan) aksiyon skinleri (val listesi)
+  var g = Economy.charGrants(p.owned || []), vals = g.actions.slice();
+  Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (c.cat === 'action' && (p.owned || []).indexOf(id) >= 0 && vals.indexOf(c.val) < 0) vals.push(c.val); });
+  return vals;
+}
 function freeLeft(p, id) { return (p && p.freeSkins && p.freeSkins[id]) || 0; }
 function useFreeSkin(p, id) { if (!(freeLeft(p, id) > 0)) return false; p.freeSkins[id]--; p.freeUsed = p.freeUsed || {}; p.freeUsed[id] = Date.now(); return true; }
 function publicView(p) {
@@ -338,4 +348,4 @@ function introCount(p) { return Economy.bakCharges(ownedIntroVals(p).length, p.o
 function paidLeft(p, id) { return (p && p.skinUses && p.skinUses[id]) || 0; }
 function usePaidSkin(p, id) { if (!(paidLeft(p, id) > 0)) return false; p.skinUses[id]--; return true; }
 function ownsIntro(p, val) { return ownedIntroVals(p).indexOf(val) >= 0; } // satın alınmış ya da karakter sahipliğiyle açılmış
-module.exports = { lastWipe: function () { return lastWipe; }, withLock: withLock, leagueChanged: leagueChanged, leaderboard: leaderboard, logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, paidLeft: paidLeft, usePaidSkin: usePaidSkin, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
+module.exports = { lastWipe: function () { return lastWipe; }, withLock: withLock, leagueChanged: leagueChanged, leaderboard: leaderboard, logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, ownedActions: ownedActions, paidLeft: paidLeft, usePaidSkin: usePaidSkin, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };

@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    version: 'dongu-economy-1.6',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
+    version: 'dongu-economy-1.8',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -58,7 +58,7 @@
       'dg24_ust-gece-kimono': 20, 'dg24_aks-gezgin-dugumu': 20,
       'dg24_sac-orgu-taci': 25, 'dg24_biyik-kivrik-usta': 25,
       'dg24_ust-mercan-ritim': 30, 'dg24_aks-zaman-halkasi': 30,
-      'c_ordek': 5, 'c_palyaco': 15                      // v9.88 (K110): özel karakterler (aşağıdaki characters ile aynı)
+      'c_ordek': 5, 'c_palyaco': 15, 'c_fikret': 3, 'c_sakir': 12                      // v9.88 (K110): özel karakterler (aşağıdaki characters ile aynı)
     },
     // v9.88 (K110): özel karakter kataloğu — tek kaynak (mağaza, sunucu satın alma, haklar). Fiyat tahmini: G ≈ her gün 6 El oynayan oyuncunun
     // günlük altını ≈ 450 (economy kurallarından hesap, canlı veri değil) → Ördek ≈ 2G, Palyaço > 4 Masa Giriş Skininin toplamı (6.000) ≈ 14G.
@@ -66,9 +66,17 @@
     // allSkins: mevcut bütün aksiyon skinleri ücretsiz + Çaktırmadan Bak her el en çok hak (bakMax). futureSkins: ileride eklenecek skinler dahil DEĞİL (katalog kararı).
     characters: [
       { id: 'c_ordek', level: 5, price: 900, grants: ['ortayi_kokla'], allSkins: false, futureSkins: false },
-      { id: 'c_palyaco', level: 15, price: 6500, grants: ['tersten_el', 'ince_ayar', 'gosterissiz_numara', 'ortayi_kokla'], allSkins: true, futureSkins: false }
+      { id: 'c_palyaco', level: 15, price: 6500, grants: ['tersten_el', 'ince_ayar', 'gosterissiz_numara', 'ortayi_kokla'], allSkins: true, futureSkins: false },
+      { id: 'c_fikret', level: 3, price: 500, grants: ['cay_servisi'], allSkins: false, futureSkins: false }, // v9.90 (K115) Çaycı Fikret; v9.91 (K116): Çay Servisi ücretsiz
+      { id: 'c_sakir', level: 12, price: 4000, grants: ['gosterissiz_numara', 'tos'], allSkins: false, futureSkins: false } // v9.90 (K115) Keçi Şakir; v9.91 (K116): Tos ücretsiz
     ],
-    bakMaxCharges: 5,                        // Çaktırmadan Bak: el başına en çok hak (K5)
+    bakMaxCharges: 5,
+    // v9.91 (K116): aksiyon skinleri — maç içi gösteri (bilgi vermez, derecelide serbest). Palyaço'nun allSkins'i yalnız Masa Giriş Skinlerini kapsar (K110: sonradan eklenenler dahil değil).
+    actionSkins: [
+      { id: 'cay_servisi', name: 'Çay Servisi', price: 1500, cat: 'prep', perHand: 1 },
+      { id: 'muhur', name: 'Mühür', price: 1500, cat: 'open', perHand: 1 },
+      { id: 'tos', name: 'Tos', price: 1500, cat: 'react', perHand: 2, windowMs: 5000 }
+    ],                        // Çaktırmadan Bak: el başına en çok hak (K5)
     // Çaktırmadan Bak kullanım paketleri (tüketilebilir; hesapta skinUses.bak). Sıra: el hakkı (skin/karakter) → ücretsiz deneme → satın alınmış kullanım.
     skinUses: [
       { id: 'u_bak3', skin: 'bak', uses: 3, price: 180, name: 'Çaktırmadan Bak · 3 kullanım' },
@@ -375,9 +383,11 @@
   // ---------- özel karakterler ve skin hakları (v9.88, K110) ----------
   function charOf(id) { for (var i = 0; i < CONFIG.characters.length; i++) if (CONFIG.characters[i].id === id) return CONFIG.characters[i]; return null; }
   function skinUseItem(id) { for (var i = 0; i < CONFIG.skinUses.length; i++) if (CONFIG.skinUses[i].id === id) return CONFIG.skinUses[i]; return null; }
-  function charGrants(ownedIds) { // sahip olunan karakterlerin verdiği haklar: {intros: [skin kimliği…], bakMax: bool, from: {skin: karakterId}}
-    var out = { intros: [], bakMax: false, from: {} }; ownedIds = ownedIds || [];
-    CONFIG.characters.forEach(function (c) { if (ownedIds.indexOf(c.id) < 0) return; c.grants.forEach(function (sk) { if (out.intros.indexOf(sk) < 0) { out.intros.push(sk); out.from[sk] = c.id; } }); if (c.allSkins) out.bakMax = true; });
+  function isActionSkin(id) { return CONFIG.actionSkins.some(function (a) { return a.id === id; }); }
+  function actionSkin(id) { for (var i = 0; i < CONFIG.actionSkins.length; i++) if (CONFIG.actionSkins[i].id === id) return CONFIG.actionSkins[i]; return null; }
+  function charGrants(ownedIds) { // sahip olunan karakterlerin verdiği haklar: {intros: [Masa Giriş Skini…], actions: [aksiyon skini…], bakMax: bool, from: {skin: karakterId}}
+    var out = { intros: [], actions: [], bakMax: false, from: {} }; ownedIds = ownedIds || [];
+    CONFIG.characters.forEach(function (c) { if (ownedIds.indexOf(c.id) < 0) return; c.grants.forEach(function (sk) { var list = isActionSkin(sk) ? out.actions : out.intros; if (list.indexOf(sk) < 0) { list.push(sk); out.from[sk] = c.id; } }); if (c.allSkins) out.bakMax = true; });
     return out;
   }
   function bakCharges(ownedIntroCount, ownedIds) { // el başına Çaktırmadan Bak hakkı: sahip olunan + karakterle açılan Masa Giriş Skini sayısı (en çok 5); allSkins karakteri → en çok
@@ -468,5 +478,5 @@
     return { total: total, fee: fee, net: net, shares: shares, undistributed: 0 };
   }
 
-  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps, arenaName: arenaName, arenaRule: arenaRule, arenaProgress: arenaProgress, arenaOpen: arenaOpen, syncArenas: syncArenas, itemLevel: itemLevel, charOf: charOf, skinUseItem: skinUseItem, charGrants: charGrants, bakCharges: bakCharges, seasonKey: seasonKey, seasonLabel: seasonLabel, seasonEndsAt: seasonEndsAt, prevSeasonKey: prevSeasonKey, leagueOf: leagueOf, leaguePoints: leaguePoints, leagueBase: leagueBase, leagueDelta: leagueDelta, settleLeague: settleLeague, leagueSummary: leagueSummary };
+  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps, arenaName: arenaName, arenaRule: arenaRule, arenaProgress: arenaProgress, arenaOpen: arenaOpen, syncArenas: syncArenas, itemLevel: itemLevel, charOf: charOf, isActionSkin: isActionSkin, actionSkin: actionSkin, skinUseItem: skinUseItem, charGrants: charGrants, bakCharges: bakCharges, seasonKey: seasonKey, seasonLabel: seasonLabel, seasonEndsAt: seasonEndsAt, prevSeasonKey: prevSeasonKey, leagueOf: leagueOf, leaguePoints: leaguePoints, leagueBase: leagueBase, leagueDelta: leagueDelta, settleLeague: settleLeague, leagueSummary: leagueSummary };
 }));
