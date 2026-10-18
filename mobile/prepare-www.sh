@@ -8,6 +8,15 @@ rm -rf www tmp_www && mkdir -p tmp_www
 for z in $ROOT/public.zip $ROOT/public-*.zip $ROOT/assets.zip $ROOT/assets-*.zip; do [ -f "$z" ] && unzip -q -o "$z" -d tmp_www; done
 if [ -d tmp_www/public ]; then mv tmp_www/public www; else mv tmp_www www; fi
 rm -rf tmp_www
+# v10.03: uygulama yapılandırması (RevenueCat herkese açık anahtarları) sayfaya gömülür: window.DONGU_CONFIG
+if [ -f app-config.json ]; then CFG=$(tr -d '\n' < app-config.json); python3 - "$CFG" <<'PY'
+import sys,re
+cfg=sys.argv[1]; p='www/index.html'; s=open(p,encoding='utf-8').read()
+tag='<script>window.DONGU_CONFIG='+cfg+';</script>'
+if 'window.DONGU_CONFIG=' not in s: s=s.replace('<script',tag+'<script',1)
+open(p,'w',encoding='utf-8').write(s); print('DONGU_CONFIG gömüldü')
+PY
+fi
 # paketten açılan sayfada service worker gereksiz (Capacitor kendi şemasından sunar); kayıt zaten hata yakalar — dokunulmuyor
 V=$(grep -o "VERSION = '[0-9.]*'" www/index.html | head -1 | sed "s/VERSION = '//; s/'//")
 [ -n "$V" ] || V=10.0

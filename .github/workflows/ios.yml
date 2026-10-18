@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths: ['mobile/**', '.github/workflows/ios.yml']
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: macos-latest
@@ -34,3 +36,10 @@ jobs:
         run: |
           echo "iOS projesi derlendi (simülatör). Mağaza paketi için: Apple Developer hesabı → sertifika + profil → GitHub Secrets → archive adımı."
           plutil -p mobile/ios/App/App/Info.plist | grep -E 'CFBundle(ShortVersion|Version|Identifier|DisplayName)|Orientation|StatusBar' || true
+      - name: Derleme bilgisi (ios-latest sürüm sayfası)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          mkdir -p out
+          { echo "sürüm $(cat mobile/version.txt) kod $(cat mobile/versioncode.txt) commit ${{ github.sha }} derleme #${{ github.run_number }}"; echo "--- Info.plist ---"; plutil -p mobile/ios/App/App/Info.plist; echo "--- Podfile.lock (RevenueCat/Capacitor) ---"; grep -E 'Capacitor|RevenueCat|Purchases' mobile/ios/App/Podfile.lock | head -20; echo "--- derleme çıktısı ---"; ls -la mobile/ios/App/build 2>/dev/null || true; find ~/Library/Developer/Xcode/DerivedData -name 'App.app' -maxdepth 6 2>/dev/null | head -3; } > out/ios-build-info.txt 2>&1 || true
+          gh release view ios-latest >/dev/null 2>&1 || gh release create ios-latest --prerelease --title "iOS derlemesi (son)" --notes "iOS projesi simülatör için derlendi (imzasız). Mağaza paketi için Apple hesabı + imza sırları gerekir."
+          gh release upload ios-latest out/ios-build-info.txt --clobber
