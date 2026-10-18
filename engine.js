@@ -654,14 +654,15 @@
       if (n < 1 || n > 13) return null;
       return { n: n, colors: [e.c] };
     }
-    // Renkli grup: okey ancak grup ÜÇ farklı renk + okey iken, eksik dördüncü renkle alınabilir.
-    // İki renk + okey'li üçlüye üçüncü renk gelince grup genişler (okey masada kalır), okey verilmez.
-    var real = m.tiles.filter(function (t) { return !isJoker(t, ok); });
-    if (real.length < 3) return null;
+    // Renkli grup: okey ancak per DOLUNCA (4 taş) eksik renk(ler)le alınabilir; per dolmadan eksik renk gelince grup genişler (okey masada kalır).
+    // Tek okey: üç gerçek renk + okey → eksik dördüncü renk. v9.98 (K128): iki okey: iki gerçek renk + iki okey → eksik iki renk (eskiden real<3 şartı
+    // yüzünden iki okeyli renkli perden okey HİÇ alınamıyordu — tester bulgusu).
+    var real = m.tiles.filter(function (t) { return !isJoker(t, ok); }), jn = m.tiles.length - real.length;
+    if (!real.length || !jn || m.tiles.length < 4) return null;
     var n0 = effective(real[0], ok).n, have = {};
     real.forEach(function (t) { have[effective(t, ok).c] = true; });
     var missing = [0, 1, 2, 3].filter(function (c) { return !have[c]; });
-    if (missing.length !== 1) return null;
+    if (missing.length !== jn) return null;
     return { n: n0, colors: missing };
   }
   function findSwapJoker(g, meldIdx, tile) { var pl = planSwap(g, meldIdx, [tile]); return pl ? pl.pairs[0].joker : null; }
