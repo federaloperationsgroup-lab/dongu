@@ -39,4 +39,7 @@ jobs:
           cp mobile/android/app/build/outputs/bundle/release/app-release.aab out/dongu-release-unsigned-$(cat mobile/version.txt).aab
           ls -la out
       - uses: actions/upload-artifact@v4
-        with: { name: android-${{ github.sha }}, path: out/*, retention-days: 30 }
+        with:
+          name: "android-${{ github.run_number }}"
+          path: "out/"
+          retention-days: 30
