@@ -1,0 +1,28 @@
+name: Yazı tipleri (fontsource → sürüm sayfası)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fonts.yml']
+permissions:
+  contents: write
+jobs:
+  fonts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Fredoka + Nunito (latin, latin-ext) woff2
+        run: |
+          mkdir -p f && cd f && npm init -y >/dev/null && npm install --no-audit --no-fund @fontsource/fredoka @fontsource/nunito
+          mkdir -p out
+          for w in 500 600 700; do for s in latin latin-ext; do cp node_modules/@fontsource/fredoka/files/fredoka-$s-$w-normal.woff2 out/ 2>/dev/null || true; done; done
+          for w in 600 700 800 900; do for s in latin latin-ext; do cp node_modules/@fontsource/nunito/files/nunito-$s-$w-normal.woff2 out/ 2>/dev/null || true; done; done
+          cp node_modules/@fontsource/fredoka/LICENSE out/LICENSE-fredoka.txt 2>/dev/null || true; cp node_modules/@fontsource/nunito/LICENSE out/LICENSE-nunito.txt 2>/dev/null || true
+          ls -la out; cd out && zip -q ../fonts.zip *
+      - name: Sürüm sayfasına koy (fonts-latest)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view fonts-latest -R ${{ github.repository }} >/dev/null 2>&1 || gh release create fonts-latest -R ${{ github.repository }} --prerelease --title "Yazı tipleri (Fredoka, Nunito — OFL)" --notes "Google Fonts yerine uygulamaya gömülen yazı tipleri (fontsource paketleri, SIL Open Font License)."
+          gh release upload fonts-latest f/fonts.zip -R ${{ github.repository }} --clobber

@@ -51,5 +51,7 @@ jobs:
         run: |
           V=$(cat mobile/version.txt)
           gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --prerelease --title "Android derlemesi (son)" --notes "GitHub Actions'ın her yüklemede ürettiği Android paketleri. APK: telefona doğrudan kurulur (bilinmeyen kaynaklara izin). AAB: Play Console için (imzalanır)."
+          # eski sürümlerin dosyalarını temizle (sürüm sayfasında yalnız son derleme kalsın)
+          for a in $(gh release view android-latest --json assets --jq '.assets[].name'); do case "$a" in *"-$V."*|build-info.txt) ;; *) gh release delete-asset android-latest "$a" -y || true;; esac; done
           gh release upload android-latest out/* --clobber
           gh release edit android-latest --notes "Sürüm $V · derleme #${{ github.run_number }} · $(date -u +%Y-%m-%dT%H:%MZ) · commit ${{ github.sha }}. APK telefona doğrudan kurulur; AAB Play Console için (imzalanır)."
