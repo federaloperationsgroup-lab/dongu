@@ -93,8 +93,8 @@ function newId() { return 'p_' + crypto.randomBytes(6).toString('hex'); }
 function newToken() { return crypto.randomBytes(18).toString('hex'); }
 function cleanName(n) { n = String(n || 'Oyuncu').replace(/[<>]/g, '').trim().slice(0, 14); return n || 'Oyuncu'; }
 // Avatar şeması (v9.69): açık alan listesi; bilinmeyen alanlar düşer. Kozmetik yuvalar: hair, beard, outfit, acc, full + gardırop yuvaları (moustache, pants, headwear, eyewear, necklace, earring, wrist)
-var AVATAR_KEYS = ['v', 'name', 'gender', 'skin', 'hair', 'hairColor', 'beard', 'outfit', 'acc', 'full', 'intro', 'moustache', 'pants', 'headwear', 'eyewear', 'necklace', 'earring', 'wrist'];
-var SLOT_DEFAULT = { hair: 'kisa', beard: 'yok', outfit: 'mont-mavi', acc: 'yok', full: 'yok', moustache: 'yok', pants: 'yok', headwear: 'yok', eyewear: 'yok', necklace: 'yok', earring: 'yok', wrist: 'yok' };
+var AVATAR_KEYS = ['v', 'name', 'gender', 'skin', 'hair', 'hairColor', 'beard', 'outfit', 'acc', 'full', 'intro', 'moustache', 'pants', 'headwear', 'eyewear', 'necklace', 'earring', 'wrist', 'makeup']; // v9.96: makyaj yuvası
+var SLOT_DEFAULT = { hair: 'kisa', beard: 'yok', outfit: 'mont-mavi', acc: 'yok', full: 'yok', moustache: 'yok', pants: 'yok', headwear: 'yok', eyewear: 'yok', necklace: 'yok', earring: 'yok', wrist: 'yok', makeup: 'yok' };
 function cleanAvatar(a) { if (!a || typeof a !== 'object') return null; var o = {}; AVATAR_KEYS.forEach(function (k) { var v = a[k]; if (typeof v === 'string') o[k] = v.slice(0, 40); else if (typeof v === 'number' || typeof v === 'boolean') o[k] = v; }); return o; }
 // Sahip olunmayan ücretli kozmetik giyilemez: katalogdaki (k, val) eşleşmesi ücretliyse ve hesapta yoksa yuva varsayılana döner (intro ayrıca denetlenir)
 function cleanCosmetics(p, av) {
