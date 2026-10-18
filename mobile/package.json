@@ -1,0 +1,24 @@
+{
+  "name": "dongu-mobile",
+  "version": "10.2.0",
+  "private": true,
+  "description": "Döngü — Android ve iOS mağaza uygulaması (Capacitor). Web paketi www/ içine public.zip + assets.zip'ten açılır; sunucu dongu.app.",
+  "scripts": {
+    "www": "sh prepare-www.sh",
+    "add:android": "npx cap add android && sh patch-native.sh android",
+    "add:ios": "npx cap add ios && sh patch-native.sh ios",
+    "icons": "npx @capacitor/assets generate --iconBackgroundColor '#0f1430' --iconBackgroundColorDark '#0f1430' --splashBackgroundColor '#0f1430' --splashBackgroundColorDark '#0f1430'"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.0.0"
+  }
+}

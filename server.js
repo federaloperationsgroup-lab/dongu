@@ -699,9 +699,24 @@ Accounts.init({ publicDir: PUBLIC }, function (e, mode) { setImmediate(function 
 Accounts.route('/api/venue/', Venues.handleHttp);
 if (Social) { Accounts.route('/api/social/', Social.handleHttp); Accounts.route('/api/dm/', Social.handleHttp); } // v9.93
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
+// v10.02 (K136): kalıcı adres dongu.app — Render'daki eski onrender.com adresi (ve www) yeni adrese 301 ile yönlendirilir; /durum, /olcum ve /yonetim yönlendirilmez (izleme ve yönetim eski adresten de çalışsın).
+// CANON_HOST ortam değişkeniyle değiştirilebilir; Render dışında (yerel/test) kapalı. Android paketi için /.well-known/assetlinks.json: ANDROID_PACKAGE + ANDROID_SHA256 (virgülle birden çok parmak izi) tanımlıysa sunulur.
+var CANON_HOST = process.env.CANON_HOST != null ? process.env.CANON_HOST : (process.env.RENDER ? 'dongu.app' : '');
+var ANDROID_PACKAGE = process.env.ANDROID_PACKAGE || '', ANDROID_SHA256 = (process.env.ANDROID_SHA256 || '').split(',').map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean);
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.01. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (CANON_HOST) { var host = String(req.headers.host || '').split(':')[0].toLowerCase(); if (host && host !== CANON_HOST && url !== '/durum' && url !== '/olcum' && url.indexOf('/yonetim/') !== 0) { res.writeHead(301, { Location: 'https://' + CANON_HOST + (req.url || '/'), 'Cache-Control': 'no-store' }); res.end(); return; } }
+  // v10.02 (K139): mağaza uygulaması (Capacitor) sayfayı paketten açar; /api çağrıları çapraz kökenden gelir → yalnız uygulama kökenlerine CORS izni
+  var origin = String(req.headers.origin || ''); if (/^(capacitor|ionic):\/\/localhost$|^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); res.setHeader('Access-Control-Allow-Headers', 'Content-Type'); res.setHeader('Access-Control-Max-Age', '86400');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  }
+  if (url === '/.well-known/assetlinks.json') {
+    if (!ANDROID_PACKAGE || !ANDROID_SHA256.length) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('bulunamadı'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
+    res.end(JSON.stringify([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: ANDROID_SHA256 } }], null, 1)); return;
+  }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.02. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/yonetim/sikayetler' || url === '/yonetim/sikayet-kapat' || url === '/yonetim/hesap-sil') { // v10.00 (K133): basit, anahtarlı şikâyet inceleme sayfası (yalnız ADMIN_KEY tanımlıysa); v10.01: kapatırken uyarı, kimlikle hesap silme (e-posta talepleri)
     var qs = {}; (req.url.split('?')[1] || '').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) qs[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); });
     if (!ADMIN_KEY || !qs.key || qs.key !== ADMIN_KEY || !Social) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('bulunamadı'); return; }

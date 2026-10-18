@@ -1,0 +1,42 @@
+name: Android (Döngü)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['public.zip', 'public-*.zip', 'assets.zip', 'assets-*.zip', 'mobile/**', '.github/workflows/android.yml']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Bağımlılıklar
+        working-directory: mobile
+        run: npm install --no-audit --no-fund
+      - name: Web paketi (www)
+        working-directory: mobile
+        run: sh prepare-www.sh
+      - name: Android projesi
+        working-directory: mobile
+        run: npx cap add android && sh patch-native.sh android
+      - name: Simgeler ve açılış ekranı
+        working-directory: mobile
+        run: npx @capacitor/assets generate --android --iconBackgroundColor '#0f1430' --iconBackgroundColorDark '#0f1430' --splashBackgroundColor '#0f1430' --splashBackgroundColorDark '#0f1430'
+      - name: Eşitle
+        working-directory: mobile
+        run: npx cap sync android
+      - name: Derle (debug APK + release AAB, imzasız)
+        working-directory: mobile/android
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleDebug bundleRelease
+      - name: Çıktılar
+        run: |
+          mkdir -p out
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk out/dongu-debug-$(cat mobile/version.txt).apk
+          cp mobile/android/app/build/outputs/bundle/release/app-release.aab out/dongu-release-unsigned-$(cat mobile/version.txt).aab
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with: { name: android-${{ github.sha }}, path: out/*, retention-days: 30 }

@@ -1,0 +1,7 @@
+node_modules/
+www/
+android/
+ios/
+tmp_www/
+version.txt
+versioncode.txt

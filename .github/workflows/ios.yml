@@ -1,0 +1,36 @@
+name: iOS (Döngü)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['mobile/**', '.github/workflows/ios.yml']
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Bağımlılıklar
+        working-directory: mobile
+        run: npm install --no-audit --no-fund
+      - name: Web paketi (www)
+        working-directory: mobile
+        run: sh prepare-www.sh
+      - name: iOS projesi
+        working-directory: mobile
+        run: npx cap add ios && sh patch-native.sh ios
+      - name: Simgeler ve açılış ekranı
+        working-directory: mobile
+        run: npx @capacitor/assets generate --ios --iconBackgroundColor '#0f1430' --iconBackgroundColorDark '#0f1430' --splashBackgroundColor '#0f1430' --splashBackgroundColorDark '#0f1430'
+      - name: Eşitle
+        working-directory: mobile
+        run: npx cap sync ios
+      - name: Derle (simülatör, imzasız — proje doğrulaması)
+        working-directory: mobile/ios/App
+        run: xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tail -40
+      - name: Bilgi
+        run: |
+          echo "iOS projesi derlendi (simülatör). Mağaza paketi için: Apple Developer hesabı → sertifika + profil → GitHub Secrets → archive adımı."
+          plutil -p mobile/ios/App/App/Info.plist | grep -E 'CFBundle(ShortVersion|Version|Identifier|DisplayName)|Orientation|StatusBar' || true

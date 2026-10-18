@@ -1,0 +1,12 @@
+{
+  "appId": "app.dongu.okey",
+  "appName": "Döngü",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false, "backgroundColor": "#0f1430" },
+  "ios": { "contentInset": "never", "backgroundColor": "#0f1430", "preferredContentMode": "mobile", "scheme": "capacitor" },
+  "plugins": {
+    "SplashScreen": { "launchShowDuration": 1500, "launchAutoHide": true, "backgroundColor": "#0f1430", "showSpinner": false, "androidScaleType": "CENTER_CROP", "splashFullScreen": true, "splashImmersive": true },
+    "StatusBar": { "overlaysWebView": true, "style": "DARK", "backgroundColor": "#0f1430" }
+  }
+}
