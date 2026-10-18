@@ -101,6 +101,68 @@ var ROOM_GRACE_MS = parseInt(process.env.ROOM_GRACE_MS) || 10 * 60 * 1000; // v9
 var NEXT_DELAY = parseInt(process.env.NEXT_DELAY) || 12000; // el bitince sonraki el kendiliğinden (ms); oda sahibi / hızlı masada herkes daha erken başlatabilir
 var ALLOW_LOCKED_STAKES = process.env.ALLOW_LOCKED_STAKES === '1'; // Usta / Efsane masaları (100 bin+) bayrakla açılır
 var ADMIN_KEY = process.env.ADMIN_KEY || ''; // v10.00 (K133): şikâyet inceleme sayfası anahtarı (Render → Environment); tanımsızsa sayfa yok (404)
+// v10.07 (K164): /yonetim/oyuncular — oyuncu ara; altın ekle/çıkar, seviye ver, karakter/skin/kullanım hediye et. Her işlem oyuncunun kaydına (adminLog) ve Render günlüğüne yazılır;
+// "oyuncuya bildir" seçiliyse açık oturumuna kısa bildirim gider ve hesabı yenilenir. Yalnız ADMIN_KEY ile (yanlış/eksik anahtar → 404).
+var ADMIN_CATS = { character: 'Karakter', intro: 'Masa Girişi', action: 'Aksiyon skini', uses: 'Kullanım paketi', tiles: 'Taş seti', theme: 'Mekân', outfit: 'Üst', pants: 'Alt', hair: 'Saç', beard: 'Sakal', face: 'Yüz', acc: 'Aksesuar' };
+function adminPlayerOp(form, cb) {
+  var id = String(form.id || ''), islem = String(form.islem || ''), not = String(form.not || '').trim().slice(0, 120), bildir = form.bildir === '1';
+  if (!/^[A-Za-z0-9_-]{3,40}$/.test(id)) return cb('Geçersiz oyuncu kimliği.', false);
+  var gift = '';
+  Accounts.adminEdit(id, function (p) {
+    var text;
+    if (islem === 'altin') {
+      var n = parseInt(String(form.deger || '').replace(/[.\s]/g, ''), 10); if (!isFinite(n) || n === 0 || Math.abs(n) > 1000000) throw new Error('Altın miktarı 1 ile 1.000.000 arasında olmalı (çıkarmak için eksi yaz: -500).');
+      var before = p.coins || 0; p.coins = Math.max(0, before + n); text = (n > 0 ? '+' : '') + n + ' altın (' + before + ' → ' + p.coins + ')'; gift = n > 0 ? '+' + n + ' altın' : '';
+    } else if (islem === 'seviye') {
+      var L = parseInt(form.deger, 10), cap = Economy.CONFIG.levelCap || 50; if (!(L >= 1 && L <= cap)) throw new Error('Seviye 1 ile ' + cap + ' arasında olmalı.');
+      var b = Accounts.levelOf(p.xp || 0).level; p.xp = Economy.cumulativeXp(L); text = 'seviye ' + b + ' → ' + L; gift = 'Seviye ' + L;
+    } else if (islem === 'hediye') {
+      var it = Accounts.catalogItem(String(form.deger || '')); if (!it) throw new Error('Ürün bulunamadı.');
+      if (it.cat === 'uses') { p.skinUses = p.skinUses || {}; p.skinUses[it.skin] = (p.skinUses[it.skin] || 0) + (it.uses || 0); text = it.name + ' → elinde ' + p.skinUses[it.skin] + ' kullanım'; }
+      else { p.owned = p.owned || []; if (p.owned.indexOf(it.id) >= 0) throw new Error('Oyuncuda zaten var: ' + it.name + '.'); p.owned.push(it.id); text = it.name; }
+      gift = it.name;
+    } else throw new Error('Bilinmeyen işlem.');
+    p.adminLog = (p.adminLog || []).concat([{ at: Date.now(), islem: islem, text: text, not: not }]).slice(-30);
+    return { text: text };
+  }, function (e, out, p) {
+    if (e) return cb('Olmadı: ' + e.message, false);
+    console.log('yönetim: ' + id + ' (' + (p.name || '') + ') ' + out.text + (not ? ' · not: ' + not : ''));
+    if (bildir && Social && Social.push) Social.push(id, { ev: 'acc', text: gift ? '🎁 Hediye: ' + gift + (not ? ' — ' + not : '') : '' });
+    cb('Yapıldı: ' + (p.name || id) + ' · ' + out.text + (bildir ? ' (oyuncuya bildirildi)' : ''), true);
+  });
+}
+function adminPlayersPage(res, qs, esc) {
+  Accounts.search(qs.q || '', function (e, list) {
+    if (e) { res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('hata: ' + e.message); return; }
+    var K = encodeURIComponent(ADMIN_KEY), act = '/yonetim/oyuncu-islem?key=' + K, items = Accounts.catalogList().filter(function (c) { return ADMIN_CATS[c.cat]; });
+    var opts = Object.keys(ADMIN_CATS).map(function (cat) { var g = items.filter(function (c) { return c.cat === cat; }); return g.length ? '<optgroup label="' + esc(ADMIN_CATS[cat]) + '">' + g.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.name) + (c.price ? ' · ' + c.price : '') + '</option>'; }).join('') + '</optgroup>' : ''; }).join('');
+    var nameOf = function (oid) { var c = Accounts.catalogItem(oid); return c ? c.name : oid; };
+    var hidden = function (p, islem) { return '<input type="hidden" name="id" value="' + esc(p.id) + '"><input type="hidden" name="islem" value="' + islem + '"><input type="hidden" name="q" value="' + esc(qs.q || '') + '">'; };
+    var common = '<input name="not" placeholder="not (isteğe bağlı)" maxlength="120"><label class="b"><input type="checkbox" name="bildir" value="1" checked> oyuncuya bildir</label>';
+    var rows = list.map(function (p) {
+      var lv = Accounts.levelOf(p.xp || 0).level, owned = p.owned || [], chars = owned.filter(function (o) { return /^c_/.test(o); }).map(nameOf), skins = owned.filter(function (o) { return /^(i_|a_)/.test(o); }).map(nameOf);
+      var log = (p.adminLog || []).slice(-3).reverse().map(function (l) { return '<li><small>' + esc(new Date(l.at).toLocaleString('tr-TR')) + '</small> ' + esc(l.text) + (l.not ? ' · <i>' + esc(l.not) + '</i>' : '') + '</li>'; }).join('');
+      return '<div class="pl"><div class="hd"><b>' + esc(p.name || '(adsız)') + '</b> <small>' + esc(p.id) + '</small><span class="tags"><em>Seviye ' + lv + '</em><em>' + (p.coins || 0).toLocaleString('tr-TR') + ' altın</em><em>' + (p.xp || 0) + ' XP</em></span></div>' +
+        '<div class="own">Karakter: ' + (chars.length ? esc(chars.join(', ')) : '—') + ' · Skin: ' + (skins.length ? esc(skins.join(', ')) : '—') + (p.lastSeen ? ' · son kayıt: ' + esc(new Date(p.lastSeen).toLocaleString('tr-TR')) : '') + '</div>' +
+        '<div class="ops"><form method="post" action="' + act + '">' + hidden(p, 'altin') + '<input name="deger" inputmode="numeric" placeholder="altın (+500 / -200)" required>' + common + '<button>Altın uygula</button></form>' +
+        '<form method="post" action="' + act + '">' + hidden(p, 'seviye') + '<input name="deger" type="number" min="1" max="' + (Economy.CONFIG.levelCap || 50) + '" placeholder="seviye" required>' + common + '<button>Seviye ayarla</button></form>' +
+        '<form method="post" action="' + act + '">' + hidden(p, 'hediye') + '<select name="deger" required>' + opts + '</select>' + common + '<button>Hediye et</button></form></div>' +
+        (log ? '<ul class="log">' + log + '</ul>' : '') + '</div>';
+    }).join('');
+    var msg = qs.msg ? '<p class="msg ' + (qs.ok === '1' ? 'ok' : 'err') + '">' + esc(qs.msg) + '</p>' : '';
+    var html = '<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Döngü · Oyuncular</title><style>' +
+      'body{font:15px system-ui,sans-serif;margin:14px;background:#f5f5f7;color:#222}h1{font-size:20px;margin:0 0 10px}a{color:#3355cc}.top{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}' +
+      '.top input{flex:1;min-width:180px;padding:10px;font-size:16px;border:1px solid #bbb;border-radius:8px}button{padding:9px 14px;font-size:15px;border:0;border-radius:8px;background:#2f6fde;color:#fff;cursor:pointer}' +
+      '.pl{background:#fff;border:1px solid #ddd;border-radius:12px;padding:10px 12px;margin:10px 0}.hd small{color:#888}.tags{display:inline-flex;gap:6px;margin-left:8px;flex-wrap:wrap}.tags em{font-style:normal;background:#eef2ff;border-radius:6px;padding:1px 7px;font-size:13px}' +
+      '.own{font-size:13px;color:#555;margin:6px 0}.ops{display:flex;flex-wrap:wrap;gap:8px}.ops form{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center;background:#fafafa;border:1px solid #eee;border-radius:10px;padding:8px;flex:1;min-width:250px}' +
+      '.ops input:not([type=checkbox]),.ops select{padding:9px;font-size:16px;border:1px solid #ccc;border-radius:7px;min-width:0;width:100%;box-sizing:border-box;grid-column:1/-1}.ops label.b{font-size:14px;color:#555;display:flex;align-items:center;gap:6px}.ops label.b input{width:20px;height:20px;margin:0}.ops button{justify-self:end}.log{margin:6px 0 0;padding-left:18px;font-size:13px;color:#555}' +
+      '.msg{padding:10px 12px;border-radius:10px;font-weight:600}.msg.ok{background:#e3f6e5;color:#1d6b2a}.msg.err{background:#fde8e8;color:#9b1c1c}.nav{font-size:13px;margin-bottom:8px}</style></head><body>' +
+      '<div class="nav"><a href="/yonetim/sikayetler?key=' + K + '">Şikâyetler</a> · <a href="/yonetim/satinalmalar?key=' + K + '">Satın almalar</a> · <b>Oyuncular</b></div><h1>Oyuncular</h1>' + msg +
+      '<form class="top" method="get" action="/yonetim/oyuncular"><input type="hidden" name="key" value="' + esc(ADMIN_KEY) + '"><input name="q" value="' + esc(qs.q || '') + '" placeholder="oyuncu adı ya da kimliği (boş: son görülen 40)"><button>Ara</button></form>' +
+      (rows || '<p>Oyuncu bulunamadı.</p>') + '<p style="font-size:12px;color:#777">Altın eksiye düşmez. Seviye ayarlamak XP\'yi o seviyenin başına çeker (seviye ödülü verilmez). Hediye kalıcıdır. Açık oturumdaki oyuncu "bildir" seçiliyse hemen görür; değilse bir sonraki girişte.</p></body></html>';
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(html);
+  });
+}
 var TEST_RIG = process.env.TEST_RIG === '1'; // yalnız otomatik test: masayı kurgulama mesajı (canlıda tanımsız → kapalı)
 var TEST_FAKE_HAND = parseInt(process.env.TEST_FAKE_HAND) || 0; // yalnız test ortamı: 12 El maçında garanti özel el (gösterge sahte okey) bu ele konur; canlıda tanımsız → etkisiz
 function humanCount(r) { return r.seats.filter(function (s) { return s && !s.bot; }).length; }
@@ -742,8 +804,8 @@ var server = http.createServer(function (req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
     res.end(JSON.stringify([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: ANDROID_SHA256 } }], null, 1)); return;
   }
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.06. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + '. Süreler: hazırlık ' + Math.round(PREP_FIRST_MS / 1000) + '/' + Math.round(PREP_MS / 1000) + ' sn, hamle ' + Math.round(TURN_MS / 1000) + ' sn (ilk hamle +' + Math.round(FIRST_TURN_EXTRA_MS / 1000) + ')' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
-  if (url === '/yonetim/sikayetler' || url === '/yonetim/sikayet-kapat' || url === '/yonetim/hesap-sil' || url === '/yonetim/satinalmalar') { // v10.00 (K133): basit, anahtarlı şikâyet inceleme sayfası (yalnız ADMIN_KEY tanımlıysa); v10.01: kapatırken uyarı, kimlikle hesap silme (e-posta talepleri)
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.07. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + '. Süreler: hazırlık ' + Math.round(PREP_FIRST_MS / 1000) + '/' + Math.round(PREP_MS / 1000) + ' sn, hamle ' + Math.round(TURN_MS / 1000) + ' sn (ilk hamle +' + Math.round(FIRST_TURN_EXTRA_MS / 1000) + ')' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/yonetim/sikayetler' || url === '/yonetim/sikayet-kapat' || url === '/yonetim/hesap-sil' || url === '/yonetim/satinalmalar' || url === '/yonetim/oyuncular' || url === '/yonetim/oyuncu-islem') { // v10.00 (K133): basit, anahtarlı şikâyet inceleme sayfası (yalnız ADMIN_KEY tanımlıysa); v10.01: kapatırken uyarı, kimlikle hesap silme (e-posta talepleri)
     var qs = {}; (req.url.split('?')[1] || '').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) qs[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); });
     if (!ADMIN_KEY || !qs.key || qs.key !== ADMIN_KEY || !Social) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('bulunamadı'); return; }
     var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
@@ -769,6 +831,13 @@ var server = http.createServer(function (req, res) {
         if (url === '/yonetim/sikayet-kapat') { Social.closeReport(qs.id, form.uyari || '', function () { back(); }); return; }
         if (form.onay !== 'SIL' || !/^[A-Za-z0-9_-]{3,40}$/.test(form.id || '')) { res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('kimlik ya da onay eksik'); return; }
         Social.deleteAccount(form.id, 'yönetim', function (e) { if (e) { res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('hata: ' + e.message); return; } back(); }); });
+      return;
+    }
+    if (url === '/yonetim/oyuncular') { adminPlayersPage(res, qs, esc); return; } // v10.07 (K164)
+    if (url === '/yonetim/oyuncu-islem' && req.method === 'POST') {
+      var ch2 = [], sz2 = 0; req.on('data', function (c) { sz2 += c.length; if (sz2 > 8000) { req.destroy(); return; } ch2.push(c); });
+      req.on('end', function () { var form = {}; Buffer.concat(ch2).toString('utf8').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) { try { form[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); } catch (e) {} } });
+        adminPlayerOp(form, function (msg, ok) { res.writeHead(303, { Location: '/yonetim/oyuncular?key=' + encodeURIComponent(ADMIN_KEY) + '&q=' + encodeURIComponent(form.q || '') + '&msg=' + encodeURIComponent(msg) + '&ok=' + (ok ? 1 : 0) }); res.end(); }); });
       return;
     }
     page(); return;
