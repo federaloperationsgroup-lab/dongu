@@ -27,6 +27,7 @@ function init(cb) {
       .then(function () { return DB.query('CREATE INDEX IF NOT EXISTS dm_conv_id ON dm (conv, id)'); })
       .then(function () { return DB.query('CREATE INDEX IF NOT EXISTS dm_unread ON dm (recipient, read)'); })
       .then(function () { return DB.query('CREATE TABLE IF NOT EXISTS reports (id SERIAL PRIMARY KEY, at BIGINT NOT NULL, reporter TEXT NOT NULL, target TEXT NOT NULL, reason TEXT NOT NULL, note TEXT, context JSONB)'); })
+      .then(function () { return DB.query('ALTER TABLE reports ADD COLUMN IF NOT EXISTS done BIGINT'); }) // v10.00 (K133): inceleme sayfasında kapatılan şikâyet
       .then(function () { cb(null, 'postgres'); })
       .catch(function (e) { DB = null; logErr('tablolar kurulamadı, dosya moduna düşüldü', e); fileInit(cb); });
   } else fileInit(cb);
@@ -101,9 +102,21 @@ function addReport(rec, cb) {
   if (DB) return DB.query('INSERT INTO reports (at, reporter, target, reason, note, context) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id', [rec.at, rec.reporter, rec.target, rec.reason, rec.note, JSON.stringify(rec.context || null)]).then(function (r) { cb(null, parseInt(r.rows[0].id, 10)); }).catch(cb);
   try { fs.mkdirSync(DATA, { recursive: true }); rec.id = now(); fs.appendFileSync(path.join(DATA, 'reports.jsonl'), JSON.stringify(rec) + '\n'); cb(null, rec.id); } catch (e) { cb(e); }
 }
+// v10.00 (K133): şikâyet inceleme sayfası — liste (son 200) ve kapatma. Dosya modunda kapatma, reports.jsonl'e {kapat:id} satırı olarak eklenir.
+function listReports(cb) {
+  if (DB) return DB.query('SELECT id, at, reporter, target, reason, note, context, done FROM reports ORDER BY at DESC LIMIT 200').then(function (r) { cb(null, r.rows.map(function (x) { return { id: parseInt(x.id, 10), at: parseInt(x.at, 10), reporter: x.reporter, target: x.target, reason: x.reason, note: x.note, context: typeof x.context === 'string' ? JSON.parse(x.context) : x.context, done: x.done ? parseInt(x.done, 10) : 0 }; })); }).catch(cb);
+  var rows = [], closed = {};
+  try { fs.readFileSync(path.join(DATA, 'reports.jsonl'), 'utf8').split('\n').filter(Boolean).forEach(function (l) { try { var o = JSON.parse(l); if (o.kapat) closed[o.kapat] = o.at; else rows.push(o); } catch (e) {} }); } catch (e) {}
+  rows.forEach(function (r) { r.done = closed[r.id] || 0; }); rows.sort(function (a, b) { return b.at - a.at; }); cb(null, rows.slice(0, 200));
+}
+function closeReport(id, cb) {
+  id = parseInt(id, 10); if (!id) return cb(new Error('kimlik'));
+  if (DB) return DB.query('UPDATE reports SET done = $2 WHERE id = $1 AND done IS NULL', [id, now()]).then(function () { cb(null); }).catch(cb);
+  try { fs.appendFileSync(path.join(DATA, 'reports.jsonl'), JSON.stringify({ kapat: id, at: now() }) + '\n'); cb(null); } catch (e) { cb(e); }
+}
 function reportCount(cb) { // /durum için
   if (DB) return DB.query('SELECT count(*)::int AS n FROM reports').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(0); });
-  try { cb(fs.readFileSync(path.join(DATA, 'reports.jsonl'), 'utf8').split('\n').filter(Boolean).length); } catch (e) { cb(0); }
+  try { cb(fs.readFileSync(path.join(DATA, 'reports.jsonl'), 'utf8').split('\n').filter(function (l) { return l && l.indexOf('"kapat"') < 0; }).length); } catch (e) { cb(0); }
 }
 
 // ---------- hız sınırı (sunucu örneği başına, bellekte) ----------
@@ -275,4 +288,4 @@ function handleHttp(url, body, cb) {
 function onlineCount() { return Object.keys(online).length; }
 function stats(cb) { reportCount(function (n) { cb({ online: Object.keys(online).length, reports: n }); }); }
 
-module.exports = { VERSION: VERSION, onlineCount: onlineCount, REASONS: REASONS, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };
+module.exports = { VERSION: VERSION, onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };

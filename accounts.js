@@ -280,7 +280,7 @@ function leaderboard(body, cb) { // POST /api/lig {id, token}: bu sezonun ilk 50
     if (e) return cb(e);
     var now = Date.now(), C = Economy.CONFIG.league;
     var finish = function (myId) {
-      var top = lb.rows.slice(0, C.top).map(function (x, i) { var o = { rank: i + 1, name: x.name, level: x.level, points: x.points, matches: x.matches, wins: x.wins }; if (myId && x.id === myId) o.me = true; return o; });
+      var top = lb.rows.slice(0, C.top).map(function (x, i) { var o = { rank: i + 1, id: x.id, name: x.name, level: x.level, points: x.points, matches: x.matches, wins: x.wins }; if (myId && x.id === myId) o.me = true; return o; }); // v10.00 (K124): id → lider tablosundan profil kartı / arkadaş ekleme (kimlik masadaki oyuncu kartında zaten paylaşılıyor)
       var mine = null; if (myId) for (var i = 0; i < lb.rows.length; i++) if (lb.rows[i].id === myId) { var m = lb.rows[i]; mine = { rank: i + 1, points: m.points, matches: m.matches, wins: m.wins }; break; }
       var prev = lb.prev.length ? { season: lb.prevSeason, label: Economy.seasonLabel(lb.prevSeason), total: lb.prev.length, top: lb.prev.slice(0, 3).map(function (x, i) { var o = { rank: i + 1, name: x.name, points: x.points, matches: x.matches }; if (myId && x.id === myId) o.me = true; return o; }) } : null;
       cb(null, { season: lb.season, label: Economy.seasonLabel(lb.season), endsAt: Economy.seasonEndsAt(now), total: lb.rows.length, top: top, me: mine, prev: prev });
