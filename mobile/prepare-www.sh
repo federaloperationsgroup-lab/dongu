@@ -20,6 +20,8 @@ fi
 # paketten açılan sayfada service worker gereksiz (Capacitor kendi şemasından sunar); kayıt zaten hata yakalar — dokunulmuyor
 V=$(grep -o "VERSION = '[0-9.]*'" www/index.html | head -1 | sed "s/VERSION = '//; s/'//")
 [ -n "$V" ] || V=10.0
-MAJOR=$(echo "$V" | cut -d. -f1); MINOR=$(echo "$V" | cut -d. -f2); MINOR=$(printf "%02d" "${MINOR:-0}")
+MAJOR=$(echo "$V" | cut -d. -f1); MINOR=$(echo "$V" | cut -s -d. -f2)
+# v10.08: printf "%02d" "08" sekizlik sayı sanıp hata veriyordu (08 ve 09) → iki haneye yalnız metin olarak tamamlanır
+case "$MINOR" in ''|*[!0-9]*) MINOR=00 ;; ?) MINOR=0$MINOR ;; esac
 echo "$V" > version.txt; echo "$MAJOR$MINOR" > versioncode.txt   # 10.02 → 1002
 echo "www hazır: sürüm $V (kod $(cat versioncode.txt)), $(find www -type f | wc -l) dosya"
