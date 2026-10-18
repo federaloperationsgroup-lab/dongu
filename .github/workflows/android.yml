@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths: ['public.zip', 'public-*.zip', 'assets.zip', 'assets-*.zip', 'mobile/**', '.github/workflows/android.yml']
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -43,3 +45,10 @@ jobs:
           name: "android-${{ github.run_number }}"
           path: "out/"
           retention-days: 30
+      - name: Sürüm sayfasına koy (android-latest; telefondan doğrudan indirilebilir)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          V=$(cat mobile/version.txt)
+          gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --prerelease --title "Android derlemesi (son)" --notes "GitHub Actions'ın her yüklemede ürettiği Android paketleri. APK: telefona doğrudan kurulur (bilinmeyen kaynaklara izin). AAB: Play Console için (imzalanır)."
+          gh release upload android-latest out/* --clobber
+          gh release edit android-latest --notes "Sürüm $V · derleme #${{ github.run_number }} · $(date -u +%Y-%m-%dT%H:%MZ) · commit ${{ github.sha }}. APK telefona doğrudan kurulur; AAB Play Console için (imzalanır)."
