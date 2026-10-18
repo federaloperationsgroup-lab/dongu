@@ -30,6 +30,12 @@ function put(v) {
   if (DB) DB.query('INSERT INTO venues (id, code, data, updated) VALUES ($1,$2,$3,now()) ON CONFLICT (id) DO UPDATE SET data=$3, code=$2, updated=now()', [v.ownerId, v.code, JSON.stringify(v)]).catch(function () {});
   else if (!saveTimer) saveTimer = setTimeout(flush, 500);
 }
+function remove(ownerId, cb) { // v10.01 (K134): hesap silinince kıraathanesi de silinir
+  var v = mem[ownerId]; if (!v) return cb && cb(null, false);
+  delete mem[ownerId]; if (v.code) delete byCode[v.code];
+  if (DB) return DB.query('DELETE FROM venues WHERE id=$1', [ownerId]).then(function () { cb && cb(null, true); }).catch(function (e) { cb && cb(e); });
+  if (!saveTimer) saveTimer = setTimeout(flush, 500); cb && cb(null, true);
+}
 function newCode() { var s = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', c; do { c = ''; for (var i = 0; i < 5; i++) c += s[Math.floor(Math.random() * s.length)]; } while (byCode[c]); return c; }
 function iid() { return 'i_' + crypto.randomBytes(4).toString('hex'); }
 function ofOwner(id) { var v = mem[id] || null; if (v) migrateGrid(v); return v; }
@@ -188,4 +194,4 @@ function handleHttp(url, body, cb) {
   });
   return true;
 }
-module.exports = { init: init, handleHttp: handleHttp, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };
+module.exports = { init: init, remove: remove, handleHttp: handleHttp, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };

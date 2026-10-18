@@ -28,15 +28,16 @@ function init(cb) {
       .then(function () { return DB.query('CREATE INDEX IF NOT EXISTS dm_unread ON dm (recipient, read)'); })
       .then(function () { return DB.query('CREATE TABLE IF NOT EXISTS reports (id SERIAL PRIMARY KEY, at BIGINT NOT NULL, reporter TEXT NOT NULL, target TEXT NOT NULL, reason TEXT NOT NULL, note TEXT, context JSONB)'); })
       .then(function () { return DB.query('ALTER TABLE reports ADD COLUMN IF NOT EXISTS done BIGINT'); }) // v10.00 (K133): inceleme sayfasında kapatılan şikâyet
-      .then(function () { cb(null, 'postgres'); })
+      .then(function () { startRetention(); cb(null, 'postgres'); })
       .catch(function (e) { DB = null; logErr('tablolar kurulamadı, dosya moduna düşüldü', e); fileInit(cb); });
   } else fileInit(cb);
 }
 function fileInit(cb) {
   try { var s = JSON.parse(fs.readFileSync(path.join(DATA, 'social.json'), 'utf8')); S.rels = s.rels || {}; S.blocks = s.blocks || {}; } catch (e) {}
   try { var d = JSON.parse(fs.readFileSync(path.join(DATA, 'dm.json'), 'utf8')); S.dm = { seq: d.seq || 0, msgs: d.msgs || [] }; } catch (e) {}
-  cb(null, 'dosya');
+  startRetention(); cb(null, 'dosya');
 }
+function startRetention() { setTimeout(function () { retention(); }, 3000); setInterval(function () { retention(); }, RETENTION_EVERY_MS).unref(); } // v10.01
 function flush() { saveTimer = null; try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(path.join(DATA, 'social.json'), JSON.stringify({ rels: S.rels, blocks: S.blocks })); fs.writeFileSync(path.join(DATA, 'dm.json'), JSON.stringify(S.dm)); } catch (e) { logErr('dosya yazılamadı', e); } }
 function dirty() { if (!DB && !saveTimer) saveTimer = setTimeout(flush, 300); }
 
@@ -109,11 +110,65 @@ function listReports(cb) {
   try { fs.readFileSync(path.join(DATA, 'reports.jsonl'), 'utf8').split('\n').filter(Boolean).forEach(function (l) { try { var o = JSON.parse(l); if (o.kapat) closed[o.kapat] = o.at; else rows.push(o); } catch (e) {} }); } catch (e) {}
   rows.forEach(function (r) { r.done = closed[r.id] || 0; }); rows.sort(function (a, b) { return b.at - a.at; }); cb(null, rows.slice(0, 200));
 }
-function closeReport(id, cb) {
+function closeReport(id, warn, cb) { // v10.01: kapatırken isteğe bağlı uyarı metni → şikâyet edilen oyuncuya yönetici bildirimi (bir sonraki girişte görür)
+  if (typeof warn === 'function') { cb = warn; warn = ''; }
   id = parseInt(id, 10); if (!id) return cb(new Error('kimlik'));
-  if (DB) return DB.query('UPDATE reports SET done = $2 WHERE id = $1 AND done IS NULL', [id, now()]).then(function () { cb(null); }).catch(cb);
-  try { fs.appendFileSync(path.join(DATA, 'reports.jsonl'), JSON.stringify({ kapat: id, at: now() }) + '\n'); cb(null); } catch (e) { cb(e); }
+  warn = cleanText(warn, 600);
+  var fin = function (e, target) { if (e) return cb(e); if (!warn || !target || target === 'silindi') return cb(null);
+    Accounts.addNotice(target, warn, function (e2) { if (e2) logErr('uyarı yazılamadı', e2); cb(null); }); };
+  if (DB) return DB.query('UPDATE reports SET done = $2 WHERE id = $1 AND done IS NULL RETURNING target', [id, now()]).then(function (r) { fin(null, r.rows[0] ? r.rows[0].target : null); }).catch(cb);
+  listReports(function (e, rows) { if (e) return cb(e); var r = null; rows.forEach(function (x) { if (x.id === id && !x.done) r = x; });
+    try { fs.appendFileSync(path.join(DATA, 'reports.jsonl'), JSON.stringify({ kapat: id, at: now() }) + '\n'); } catch (e2) { return cb(e2); }
+    fin(null, r ? r.target : null); });
 }
+// ---------- v10.01 (K134): saklama süreleri, veri indirme, hesap silme ----------
+var DM_KEEP_DAYS = process.env.DM_KEEP_DAYS != null ? parseFloat(process.env.DM_KEEP_DAYS) : 90, REPORT_KEEP_DAYS = process.env.REPORT_KEEP_DAYS != null ? parseFloat(process.env.REPORT_KEEP_DAYS) : 365;
+var RETENTION_EVERY_MS = parseInt(process.env.RETENTION_EVERY_MS) || 6 * 3600 * 1000;
+function retention(cb) { // mesajlar gönderildikten DM_KEEP_DAYS gün, kapanmış şikâyetler kapanıştan REPORT_KEEP_DAYS gün sonra silinir (Gizlilik Politikası m. 5)
+  cb = cb || function () {};
+  var tDm = now() - DM_KEEP_DAYS * 86400000, tRep = now() - REPORT_KEEP_DAYS * 86400000, out = { dm: 0, reports: 0 };
+  var fin = function () { if (out.dm || out.reports) console.log('saklama süresi: ' + out.dm + ' mesaj, ' + out.reports + ' kapanmış şikâyet silindi'); cb(null, out); };
+  if (DB) return DB.query('DELETE FROM dm WHERE at < $1', [tDm]).then(function (r) { out.dm = r.rowCount; return DB.query('DELETE FROM reports WHERE done IS NOT NULL AND done < $1', [tRep]); }).then(function (r) { out.reports = r.rowCount; fin(); }).catch(function (e) { logErr('saklama', e); cb(e, out); });
+  var before = S.dm.msgs.length; S.dm.msgs = S.dm.msgs.filter(function (m) { return m.at >= tDm; }); out.dm = before - S.dm.msgs.length; if (out.dm) dirty();
+  rewriteReports(function (rows) { var keep = rows.filter(function (r) { return !(r.done && r.done < tRep); }); out.reports = rows.length - keep.length; return keep; }, function () { fin(); });
+}
+function rewriteReports(mapFn, cb) { // dosya modu: şikâyet dosyasını (kapat satırları dâhil) yeniden yazar; mapFn(rows) → kalacak satırlar (done alanıyla)
+  listReports(function (e, rows) { if (e) return cb(e);
+    var keep = mapFn(rows.slice()); var lines = keep.map(function (r) { var d = r.done; var o = Object.assign({}, r); delete o.done; var l = JSON.stringify(o); if (d) l += '\n' + JSON.stringify({ kapat: r.id, at: d }); return l; });
+    try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(path.join(DATA, 'reports.jsonl'), lines.length ? lines.join('\n') + '\n' : ''); cb(null); } catch (e2) { cb(e2); } });
+}
+function exportAccount(me, cb) { // "Verilerimi indir": hesap kaydı (anahtar hariç), arkadaşlar, engeller, bütün mesajlar
+  var acc = Object.assign({}, me); delete acc.token;
+  listRels(me.id, function (e, rels) { if (e) return cb(e);
+    listBlocks(me.id, function (e2, blocks) { if (e2) return cb(e2);
+      allMsgs(me.id, function (e3, msgs) { if (e3) return cb(e3);
+        cb(null, { surum: VERSION, alindi: new Date().toISOString(), hesap: acc, iliskiler: rels.map(function (r) { return { kisi: other(r, me.id), durum: r.state, baslatan: r.by, zaman: r.at }; }), engeller: blocks, mesajlar: msgs.map(function (m) { return { id: m.id, gonderen: m.sender, alici: m.recipient, metin: m.body, zaman: m.at, okundu: !!m.read }; }) }); }); }); });
+}
+function allMsgs(id, cb) {
+  if (DB) return DB.query('SELECT id, conv, sender, recipient, cid, body, at, read FROM dm WHERE sender=$1 OR recipient=$1 ORDER BY id LIMIT 20000', [id]).then(function (r) { cb(null, r.rows.map(row2msg)); }).catch(cb);
+  cb(null, S.dm.msgs.filter(function (m) { return m.sender === id || m.recipient === id; }));
+}
+function deleteAccount(id, why, cb) { // hesap, arkadaşlık/engel, mesajlar ve kıraathane silinir; şikâyet kayıtlarında kimlik anonimleştirilir (Gizlilik Politikası m. 5 ve 7)
+  if (!validId(id)) return cb(new Error('kimlik'));
+  var Venues = null; try { Venues = require('./venues.js'); } catch (e) {}
+  var step = function (fn) { return new Promise(function (res, rej) { fn(function (e) { if (e) rej(e); else res(); }); }); };
+  var pr;
+  if (DB) pr = DB.query('DELETE FROM dm WHERE sender=$1 OR recipient=$1', [id]).then(function () { return DB.query('DELETE FROM social_rel WHERE a=$1 OR b=$1', [id]); }).then(function () { return DB.query('DELETE FROM social_block WHERE blocker=$1 OR blocked=$1', [id]); })
+    .then(function () { return DB.query("UPDATE reports SET reporter = CASE WHEN reporter=$1 THEN 'silindi' ELSE reporter END, target = CASE WHEN target=$1 THEN 'silindi' ELSE target END, context = (context::jsonb || CASE WHEN reporter=$1 THEN '{\"reporterName\":\"silinmiş hesap\"}'::jsonb ELSE '{}'::jsonb END || CASE WHEN target=$1 THEN '{\"targetName\":\"silinmiş hesap\"}'::jsonb ELSE '{}'::jsonb END) WHERE reporter=$1 OR target=$1", [id]); });
+  else pr = Promise.resolve().then(function () {
+    S.dm.msgs = S.dm.msgs.filter(function (m) { return m.sender !== id && m.recipient !== id; });
+    Object.keys(S.rels).forEach(function (k) { var r = S.rels[k]; if (r.a === id || r.b === id) delete S.rels[k]; });
+    Object.keys(S.blocks).forEach(function (k) { var p = k.split('|'); if (p[0] === id || p[1] === id) delete S.blocks[k]; });
+    dirty();
+    return step(function (d) { rewriteReports(function (rows) { rows.forEach(function (r) { r.context = r.context || {}; if (r.reporter === id) { r.reporter = 'silindi'; r.context.reporterName = 'silinmiş hesap'; } if (r.target === id) { r.target = 'silindi'; r.context.targetName = 'silinmiş hesap'; } }); return rows; }, d); });
+  });
+  pr.then(function () { return step(function (d) { if (Venues && Venues.remove) Venues.remove(id, function () { d(); }); else d(); }); })
+    .then(function () { return step(function (d) { Accounts.remove(id, d); }); })
+    .then(function () { (online[id] || []).forEach(function (w) { try { w.send(JSON.stringify({ t: 'social', ev: 'deleted' })); w.close(); } catch (e) {} }); delete online[id]; console.log('hesap silindi: ' + id + ' (' + (why || 'oyuncu') + ')'); cb(null, { ok: true }); })
+    .catch(function (e) { logErr('hesap silme', e); cb(e); });
+}
+function opExport(me, body, cb) { if (!rate('exp:' + me.id, 5, 600000)) return cb(new Error('Çok sık indirme isteği; biraz bekle.')); exportAccount(me, cb); }
+function opDelete(me, body, cb) { if (body.confirm !== 'SIL') return cb(new Error('Silme onayı eksik.')); deleteAccount(me.id, 'oyuncu', cb); }
 function reportCount(cb) { // /durum için
   if (DB) return DB.query('SELECT count(*)::int AS n FROM reports').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(0); });
   try { cb(fs.readFileSync(path.join(DATA, 'reports.jsonl'), 'utf8').split('\n').filter(function (l) { return l && l.indexOf('"kapat"') < 0; }).length); } catch (e) { cb(0); }
@@ -278,7 +333,7 @@ function opRead(me, body, cb) { // sohbet açılınca gelenler okundu; karşı t
 }
 
 // ---------- HTTP ----------
-var OPS = { '/api/social/me': opMe, '/api/social/state': opState, '/api/social/request': opRequest, '/api/social/accept': opAccept, '/api/social/reject': opReject, '/api/social/cancel': opCancel, '/api/social/unfriend': opUnfriend, '/api/social/block': opBlock, '/api/social/unblock': opUnblock, '/api/social/report': opReport, '/api/dm/send': opSend, '/api/dm/history': opHistory, '/api/dm/read': opRead };
+var OPS = { '/api/social/me': opMe, '/api/social/state': opState, '/api/social/request': opRequest, '/api/social/accept': opAccept, '/api/social/reject': opReject, '/api/social/cancel': opCancel, '/api/social/unfriend': opUnfriend, '/api/social/block': opBlock, '/api/social/unblock': opUnblock, '/api/social/report': opReport, '/api/dm/send': opSend, '/api/dm/history': opHistory, '/api/dm/read': opRead, '/api/social/export': opExport, '/api/social/delete': opDelete }; // v10.01: veri indirme + hesap silme
 function handleHttp(url, body, cb) {
   var fn = OPS[url]; if (!fn) return cb(new Error('yok'));
   if (!body || !validId(body.id)) return cb(new Error('Hesap bulunamadı; yeniden giriş gerekli.'));
@@ -288,4 +343,4 @@ function handleHttp(url, body, cb) {
 function onlineCount() { return Object.keys(online).length; }
 function stats(cb) { reportCount(function (n) { cb({ online: Object.keys(online).length, reports: n }); }); }
 
-module.exports = { VERSION: VERSION, onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };
+module.exports = { VERSION: VERSION, deleteAccount: deleteAccount, retention: retention, exportAccount: exportAccount, /* v10.01 */ onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };

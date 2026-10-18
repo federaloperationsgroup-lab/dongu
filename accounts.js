@@ -89,6 +89,18 @@ function runLock(id, q) {
   guard = setTimeout(function () { console.log('hesap kilidi süre aşımı: ' + id); release(); }, LOCK_MAX_MS);
   try { task(release); } catch (e) { release(); throw e; }
 }
+// v10.01 (K134): yasal metin onayı — istemci ilk açılışta 18+ ve Gizlilik Politikası / Kullanım Koşulları onayını alır; sürüm metin sürümüdür (gizlilik-ve-kullanim-kosullari-v1.md).
+var CONSENT_V = String(process.env.CONSENT_VERSION || '1.1');
+function cleanConsent(c) { if (!c || typeof c !== 'object' || typeof c.v !== 'string') return null; return { v: c.v.slice(0, 10), at: typeof c.at === 'number' ? c.at : Date.now(), adult: c.adult !== false }; }
+function remove(id, cb) { // v10.01: hesap silme (sosyal/mesaj/şikâyet temizliği social.js'de; burada yalnız oyuncu kaydı)
+  if (!id || typeof id !== 'string') return cb(new Error('kimlik'));
+  if (DB) return DB.query('DELETE FROM players WHERE id=$1', [id]).then(function (r) { cb(null, r.rowCount > 0); }).catch(cb);
+  var had = !!mem[id]; delete mem[id]; if (!saveTimer) saveTimer = setTimeout(flushFile, 500); cb(null, had);
+}
+function addNotice(id, text, cb) { // v10.01: yönetici uyarısı — oyuncu bir sonraki girişte görür (Koşullar m. 7: gerekçeli bildirim)
+  withLock(id, function (release) { get(id, function (e, p) { if (e || !p) { release(); return cb(e || new Error('Oyuncu bulunamadı.')); }
+    p.notices = (p.notices || []).slice(-9); p.notices.push({ at: Date.now(), text: String(text || '').slice(0, 600) }); put(p, function (e2) { release(); cb(e2 || null); }); }); });
+}
 function newId() { return 'p_' + crypto.randomBytes(6).toString('hex'); }
 function newToken() { return crypto.randomBytes(18).toString('hex'); }
 function cleanName(n) { n = String(n || 'Oyuncu').replace(/[<>]/g, '').trim().slice(0, 14); return n || 'Oyuncu'; }
@@ -121,13 +133,14 @@ function freeLeft(p, id) { return (p && p.freeSkins && p.freeSkins[id]) || 0; }
 function useFreeSkin(p, id) { if (!(freeLeft(p, id) > 0)) return false; p.freeSkins[id]--; p.freeUsed = p.freeUsed || {}; p.freeUsed[id] = Date.now(); return true; }
 function publicView(p) {
   var now = Date.now(), lv = levelOf(p.xp), ec = Economy.summary(p, now);
-  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned) }; // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
+  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, consent: p.consent ? p.consent.v : null, consentReq: CONSENT_V, notices: p.notices || [], tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned) }; // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
 }
 function takeView(p) { var v = publicView(p); if (p.skinGiftNew) { delete p.skinGiftNew; return { view: v, dirty: true }; } return { view: v, dirty: false }; } // hoş geldin bildirimi bir kez: bayrak ilk görünümle düşer (kayıt çağıranın tek yazmasıyla)
 function create(body, cb) {
   var p = { id: newId(), token: newToken(), name: cleanName(body.name), avatar: cleanAvatar(body.avatar), coins: START_COINS, xp: 0, owned: [], lastBonus: 0, stats: { hands: 0, matches: 0, wins: 0 }, created: Date.now(), lastSeen: Date.now() };
   // cihazdaki eski dolap (prototipten geçiş): yalnızca ücretsiz ya da zaten var olan ürünler aktarılır, jeton aktarılmaz
   if (Array.isArray(body.owned)) body.owned.slice(0, 60).forEach(function (id) { var c = catalog[id]; if (typeof id === 'string' && c && (c.free || !c.price) && p.owned.indexOf(id) < 0) p.owned.push(id); });
+  p.consent = cleanConsent(body.consent); // v10.01
   p.charMig = 1; // v9.88: yeni hesap ücretsiz dönemi görmedi; geçiş temizliği uygulanmaz (ilk /api/me satın alınmış karakteri silmesin)
   ensureSkinGift(p); Economy.syncArenas(p);
   var tv = takeView(p);
@@ -158,6 +171,8 @@ function me(body, cb) {
     var changed = ensureSkinGift(p); // eski hesaplar da ilk girişte bir kez alır (yalnız bir kerelik hak; alımlar değişmez)
     if (!p.charMig) { p.charMig = 1; changed = true; Economy.CONFIG.characters.forEach(function (c) { var i = p.owned.indexOf(c.id); if (i >= 0) p.owned.splice(i, 1); }); } // v9.88 geçişi (bir kez): özel karakterler ücretsiz dönemde dolaba 0 altınla girmişti; artık satın alınır (altın + seviye). Giyiliyse cleanCosmetics kendi karaktere döndürür.
     var hadArenas = !!p.arenas; if (Economy.syncArenas(p).length || !hadArenas) changed = true; // v9.86: koşulu sağlanan mekânlar hesaba yazılır (eski hesap: ilk girişte)
+    if (body.consent) { var cs = cleanConsent(body.consent); if (cs && (!p.consent || p.consent.v !== cs.v)) { p.consent = cs; changed = true; } } // v10.01: yasal metin onayı (sürüm değişince yeniden alınır)
+    if (body.ackNotices && p.notices && p.notices.length) { p.notices = []; changed = true; } // v10.01: yönetici uyarıları görüldü
     if (body.name) { var n = cleanName(body.name); if (n !== p.name) { p.name = n; changed = true; } }
     if (body.avatar) { p.avatar = cleanCosmetics(p, cleanAvatar(body.avatar)); changed = true;
       if (p.avatar && p.avatar.intro) { // Masa Giriş Skini: yalnızca sahip olunan kuşanılabilir (deneme hakkı koltuğa oturulurken ayrıca değerlendirilir)
@@ -348,4 +363,4 @@ function introCount(p) { return Economy.bakCharges(ownedIntroVals(p).length, p.o
 function paidLeft(p, id) { return (p && p.skinUses && p.skinUses[id]) || 0; }
 function usePaidSkin(p, id) { if (!(paidLeft(p, id) > 0)) return false; p.skinUses[id]--; return true; }
 function ownsIntro(p, val) { return ownedIntroVals(p).indexOf(val) >= 0; } // satın alınmış ya da karakter sahipliğiyle açılmış
-module.exports = { get: get, /* v9.93: sosyal modül (ad/görünüm/seviye özeti) */ lastWipe: function () { return lastWipe; }, withLock: withLock, leagueChanged: leagueChanged, leaderboard: leaderboard, logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, ownedActions: ownedActions, paidLeft: paidLeft, usePaidSkin: usePaidSkin, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
+module.exports = { get: get, remove: remove, addNotice: addNotice, CONSENT_V: CONSENT_V, /* v10.01 */ /* v9.93: sosyal modül (ad/görünüm/seviye özeti) */ lastWipe: function () { return lastWipe; }, withLock: withLock, leagueChanged: leagueChanged, leaderboard: leaderboard, logMatch: logMatch, matchCounts: matchCounts, matchSummary: matchSummary, cleanCosmetics: cleanCosmetics, cleanAvatar: cleanAvatar, ensureSkinGift: ensureSkinGift, freeLeft: freeLeft, useFreeSkin: useFreeSkin, skinIds: skinIds, init: init, handleHttp: handleHttp, route: route, save: put, db: function () { return DB; }, auth: auth, ownsIntro: ownsIntro, introCount: introCount, ownedActions: ownedActions, paidLeft: paidLeft, usePaidSkin: usePaidSkin, grant: grant, releaseEscrows: releaseEscrows, levelOf: levelOf, publicView: publicView, Economy: Economy, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
