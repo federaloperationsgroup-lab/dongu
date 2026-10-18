@@ -72,7 +72,7 @@ function viewFor(r, seat) {
     v.players[rot(i)] = { hand: mine ? p.hand : new Array(p.hand.length), opened: p.opened, openedThisTurn: p.openedThisTurn, openedTurnNo: p.openedTurnNo, discards: p.discards };
   }
   v.table = g.table.map(function (m) { return { tiles: m.tiles.map(function (t) { var c = Object.assign({}, t); if (c.placedBy != null) c.placedBy = rot(c.placedBy); return c; }), kind: m.kind, owner: rot(m.owner) }; });
-  var ho = function (h) { return h ? { hand: h.hand, scores: arr4(h.scores), winner: rot(h.winner), finishType: h.finishType, detail: h.detail ? arr4(h.detail) : null, totals: arr4(h.totals), ranks: arr4(h.ranks) } : null; };
+  var ho = function (h) { return h ? { hand: h.hand, scores: arr4(h.scores), winner: rot(h.winner), finishType: h.finishType, detail: h.detail ? arr4(h.detail) : null, totals: arr4(h.totals), ranks: arr4(h.ranks), finishTile: h.finishTile || null } : null; }; // v10.06 (K160): bitiş taşı ortada
   v.history = g.history.map(ho);
   v.handOver = ho(g.handOver);
   return v;
@@ -94,6 +94,7 @@ function broadcastState(r, extra) {
 // ---- oyun akışı ----
 // ---- Rakibin eline bak / Tokat: haklar, hedef ve süreler sunucuda ----
 var PEEK_MS = 8000, PREP_MS = parseInt(process.env.PREP_MS) || 15000, MAX_SKINS = 5;
+var PREP_FIRST_MS = parseInt(process.env.PREP_FIRST_MS) || (process.env.PREP_MS ? PREP_MS : 25000), FIRST_TURN_EXTRA_MS = process.env.FIRST_TURN_EXTRA_MS != null ? (parseInt(process.env.FIRST_TURN_EXTRA_MS) || 0) : (process.env.TURN_MS ? 0 : 15000); // test ortamı (PREP_MS/TURN_MS verilmiş) eski süreleri korur // v10.06 (K148): maçın İLK elinde hazırlık 25 sn ve ilk insan hamlesine +15 sn (tester: el başında sırasının geldiğini fark edemeden süre doldu)
 var TURN_MS = parseInt(process.env.TURN_MS) || 30000; var DISC_GRACE_MS = parseInt(process.env.DISC_GRACE_MS) || 10000; // bağlantısı kopan (çıkmamış) insanın sırası: 10 sn tolerans (sayfa yenileme hamleyi kaybettirmesin), sonra sunucu oynar // hamle süresi (AFK): taş alma ve taş atma için ayrı ayrı 30 sn (v9.73; önce 45) // PREP_MS: el başı hazırlık/hazır olma süresi (test için kısaltılabilir)
 var REMATCH_WAIT = parseInt(process.env.REMATCH_WAIT) || 60000; // v9.76 "Bu masayla devam et": maç sonunda oy süresi
 var ROOM_GRACE_MS = parseInt(process.env.ROOM_GRACE_MS) || 10 * 60 * 1000; // v9.75: arkadaş odasında (başlamadan) bütün insanların bağlantısı kopsa da oda bu süre yaşar — kurucu kodu paylaşmak için uygulamadan çıkınca oda silinmesin
@@ -167,12 +168,12 @@ function seatEligible(r, i, now) { // uygun insan eli: bağlı süre ≥ %70 ve 
 function beginPrep(r) {
   beginHandStats(r);
   r.charges = r.seats.map(function (s) { return s && !s.bot ? Math.min(MAX_SKINS, Math.max(0, parseInt(s.skins) || 0)) : 0; }); // her elde yenilenir, birikmez
-  r.actUsed = [{}, {}, {}, {}]; r.lastSlap = {}; r.lastOpen = null; // v9.91 (K116): aksiyon skini el sayaçları ve tos pencereleri
+  r.actUsed = [{}, {}, {}, {}]; r.introUsed = [{}, {}, {}, {}]; r.lastSlap = {}; r.lastOpen = null; // v9.91 (K116): aksiyon skini el sayaçları ve tos pencereleri
   r.peeks = {}; r.prepDone = {};
   // Hazırlık/hazır olma aşaması: masada bağlı bir insan varsa her el başında en çok PREP_MS; bütün insanlar "Oyuna geç" deyince (prepDone) erken biter.
   // (v9.64: önceden yalnız bakış hakkı olan varsa açılıyordu; açıklama penceresi okunurken botlar oynamaya başlıyordu.)
   var humans = r.seats.some(function (s) { return s && !s.bot && s.ws && s.ws.readyState === 1; });
-  r.prepUntil = humans ? Date.now() + PREP_MS : 0;
+  r.prepUntil = humans ? Date.now() + ((r.g && r.g.hand === 1) ? PREP_FIRST_MS : PREP_MS) : 0; // v10.06 (K148): ilk el daha uzun hazırlık
 }
 function seatFree(s, id) { return (s && s.free && s.free[id]) || 0; }
 function seatPaid(s, id) { return (s && s.paid && s.paid[id]) || 0; } // v9.88: satın alınmış kullanım hakları (sanitizeSeat doldurur) // koltuğun hesaptan okunmuş ücretsiz skin hakları (sanitizeSeat doldurur)
@@ -258,25 +259,36 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   Accounts.auth(s.acc, function (e, p) {
     if (e || !p) { s.skins = 0; s.free = null; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
     s.skins = Accounts.introCount(p); s.actions = Accounts.ownedActions(p); // v9.91 (K116)
+    s.intros = INTRO_IDS.filter(function (x) { return Accounts.ownsIntro(p, x); }); // v10.06 (K159): istenildiği an kullanılabilen Masa Giriş Skinleri
     var vn = Venues.ofOwner(p.id); s.prof = { id: p.id, level: Accounts.levelOf(p.xp).level, matches: (p.stats && p.stats.matches) || 0, wins: (p.stats && p.stats.wins) || 0, owned: (p.owned || []).length, venue: vn ? vn.name : null, venueTier: vn ? vn.tier : null, arenas: Economy.CONFIG.arenas.filter(function (a) { return Economy.arenaOpen(p, a.theme); }).length, lp: Economy.leaguePoints(p, Date.now()) }; // v9.74 profil kartı (v9.86: açık mekân sayısı · v9.87: bu sezonun Döngü Puanı)
     s.venue = vn ? { code: vn.code, name: vn.name, tier: vn.tier, tierName: Economy.venueTier(vn.tier).name } : null; // v9.76 ev sahibi kartı için
     if (Accounts.ensureSkinGift(p)) Accounts.grant(s.acc, function (q) { Accounts.ensureSkinGift(q); return {}; }); // v9.86: yazma hesap kilidi altında (eşzamanlı ödülü silmesin)
     s.free = Object.assign({}, p.freeSkins || {}); // ücretsiz başlangıç hakları (Çaktırmadan Bak + Masa Giriş Skini denemesi); kullanımda hesaptan düşer
     s.paid = Object.assign({}, p.skinUses || {}); // v9.88: satın alınmış kullanım hakları
     if (s.avatar) {
-      var before = JSON.stringify(s.avatar); s.avatar = Accounts.cleanCosmetics(p, Accounts.cleanAvatar(s.avatar)); s.introTrial = null;
-      if (s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) { if (Accounts.freeLeft(p, s.avatar.intro) > 0) s.introTrial = s.avatar.intro; else delete s.avatar.intro; } // sahip değil: ücretsiz deneme hakkı varsa bu maç için kalır (maç başında düşer), yoksa kalkar
+      var before = JSON.stringify(s.avatar); s.avatar = Accounts.cleanCosmetics(p, Accounts.cleanAvatar(s.avatar));
+      if (s.avatar.intro && !Accounts.ownsIntro(p, s.avatar.intro)) delete s.avatar.intro; // v10.06 (K159): maç başı deneme kuyruğu kalktı — deneme, oyuncu Skinler panelinde "Kullan" deyince o an düşer
       if (JSON.stringify(s.avatar) !== before) broadcastRoom(r);
     } // masadaki görünüm hesaptaki sahipliğe göre (ücretli kozmetik + Masa Giriş Skini)
   });
 }
-function consumeIntroTrials(r) { // maç başladı (1. el): deneme olarak kuşanılmış Masa Giriş Skini herkese bir kez oynar; hak bu anda düşer (sayfa yenileme / yeniden bağlanma yeni gösterim vermez: matchId)
-  r.seats.forEach(function (s) {
-    if (!s || s.bot || !s.introTrial || !s.acc) return;
-    var id = s.introTrial; s.introTrial = null; if (s.free && s.free[id] > 0) s.free[id]--;
-    Accounts.grant(s.acc, function (p) { Accounts.useFreeSkin(p, id); return {}; }, function (e, out, view) { if (!e && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'me', player: view, introTrialUsed: id }); });
-    log(r, s.name + ' Masa Giriş Skini denemesi: ' + id);
-  });
+var INTRO_IDS = ['tersten_el', 'ince_ayar', 'gosterissiz_numara', 'ortayi_kokla'], INTRO_NAMES = { tersten_el: 'Tersten El', ince_ayar: 'İnce Ayar', gosterissiz_numara: 'Gösterişsiz Numara', ortayi_kokla: 'Ortayı Kokla' };
+var INTRO_GAP_MS = 2400; // iki gösteri arası (aynı oyuncu): gösteriler üst üste binmez
+// v10.06 (K159): Masa Giriş Skini istenildiği an — maçın herhangi bir elinde, herhangi bir anında (hazırlık, kendi sırası, rakip sırası) "Kullan" → o an bütün masaya oynar.
+// Sahip olunan (satın alınmış / karakterle açılmış) skin her elde 1 kez; sahip olunmayan skinin ücretsiz denemesi (1) kullanıldığı an düşer. Eski "sıradaki maçın başında" kuyruğu yok.
+function handleIntroUse(r, seat, m) {
+  var g = r.g; if (!g || g.finished) throw new Error('Masa Giriş Skini maç sırasında kullanılır.');
+  var id = String(m.skin || ''); if (INTRO_IDS.indexOf(id) < 0) throw new Error('Bilinmeyen skin.');
+  var me = r.seats[seat], now = Date.now(), nm = INTRO_NAMES[id];
+  if (me.introAt && now - me.introAt < INTRO_GAP_MS) throw new Error('Gösterin sürüyor; bitince yeniden dene.');
+  r.introUsed = r.introUsed || [{}, {}, {}, {}];
+  var owned = (me.intros || []).indexOf(id) >= 0, trial = !owned && seatFree(me, id) > 0;
+  if (!owned && !trial) throw new Error(nm + ' için hakkın yok: mağazadan al (Masa Girişi) ya da karakterle aç.');
+  if (owned && (r.introUsed[seat][id] || 0) >= 1) throw new Error('Bu elde ' + nm + ' kullandın; sonraki elde yine kullanabilirsin.');
+  r.introUsed[seat][id] = (r.introUsed[seat][id] || 0) + 1; me.introAt = now;
+  if (trial) { me.free[id] = 0; if (me.acc) Accounts.grant(me.acc, function (p) { Accounts.useFreeSkin(p, id); return {}; }, function (e, out, view) { if (!e && me.ws && me.ws.readyState === 1) send(me.ws, { t: 'me', player: view }); }); }
+  r.seats.forEach(function (s, i) { if (s && !s.bot && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'introFx', skin: id, from: rotateIdx(seat, i), trial: trial && i === seat }); });
+  log(r, (me.name || '?') + ' Masa Giriş Skini: ' + nm + (trial ? ' (ücretsiz deneme)' : ''));
 }
 function accOf(m) { return m.acc && typeof m.acc.id === 'string' && typeof m.acc.token === 'string' ? { id: m.acc.id.slice(0, 40), token: m.acc.token.slice(0, 80) } : null; }
 // ---- v9.76 "Bu masayla devam et" (sosyal rövanş, K-D1/A): maç bitince her insan koltuğu oy verir (REMATCH_WAIT); en az 2 "devam" → aynı oda bekleme odasına döner (yeni matchId), hayır/oysuz/kopuk koltuklar boşalır,
@@ -411,7 +423,6 @@ function startGame(r) {
   r.hostVenue = pickHostVenue(r); // v9.76 görsel ev sahipliği (K-D2: oturma sırasında kıraathanesi olan ilk oyuncu; kıraathane masasında o kıraathane)
   Okey.startHand(r.g);
   beginPrep(r);
-  consumeIntroTrials(r);
   log(r, 'oyun başladı' + (r.rematchOf ? ' (rövanş)' : ''));
   broadcastRoom(r);
   broadcastState(r, { event: 'handStart' });
@@ -463,8 +474,9 @@ function scheduleBots(r) {
   }
   // Hamle süresi (AFK, 8 Ekim 2026): bağlı insan her hamle (taş alma / taş atma) için TURN_MS içinde oynamazsa sunucu onun yerine oynar;
   // bot hamlesi sayılır (hamlelerinin yarısından fazlası botsa hükmen son — K14 kuralı). Süre her hamleyle yeniden başlar; görünümde turnLeft ile herkese gider.
-  r.turnUntil = Date.now() + TURN_MS;
-  r.seats.forEach(function (x, i) { if (x && !x.bot && x.ws) send(x.ws, { t: 'turn', actor: rotateIdx(a, i), left: TURN_MS, phase: g.phase }); }); // sayaç herkese: kimin sırası, kaç sn (görünüm zaten gönderildi)
+  var turnMs = TURN_MS + ((g.hand === 1 && g.turnNo < 4 && g.phase === 'pickup') ? FIRST_TURN_EXTRA_MS : 0); // v10.06 (K148): maçın ilk elinde herkesin İLK hamlesi (ilk tur, taş alma) için ek süre
+  r.turnUntil = Date.now() + turnMs;
+  r.seats.forEach(function (x, i) { if (x && !x.bot && x.ws) send(x.ws, { t: 'turn', actor: rotateIdx(a, i), left: turnMs, phase: g.phase }); }); // sayaç herkese: kimin sırası, kaç sn (görünüm zaten gönderildi)
   r.timer = setTimeout(function () {
     if (!r.g || r.g.phase === 'handover' || actorOf(r.g) !== a || r.g.phase === 'claim') return;
     try { Okey.botStep(r.g); } catch (e) { log(r, 'AFK hamle hatası ' + e.message); r.g.phase = 'play'; }
@@ -473,7 +485,7 @@ function scheduleBots(r) {
     broadcastState(r, { event: 'afk', actor: a });
     rewardIfOver(r);
     scheduleBots(r);
-  }, TURN_MS);
+  }, turnMs);
 }
 function tileById(g, seat, id) { var h = g.players[seat].hand; for (var i = 0; i < h.length; i++) if (h[i].id === id) return h[i]; return null; }
 function handleAct(r, seat, m) {
@@ -730,7 +742,7 @@ var server = http.createServer(function (req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
     res.end(JSON.stringify([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: ANDROID_SHA256 } }], null, 1)); return;
   }
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.05. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.06. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + '. Süreler: hazırlık ' + Math.round(PREP_FIRST_MS / 1000) + '/' + Math.round(PREP_MS / 1000) + ' sn, hamle ' + Math.round(TURN_MS / 1000) + ' sn (ilk hamle +' + Math.round(FIRST_TURN_EXTRA_MS / 1000) + ')' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/yonetim/sikayetler' || url === '/yonetim/sikayet-kapat' || url === '/yonetim/hesap-sil' || url === '/yonetim/satinalmalar') { // v10.00 (K133): basit, anahtarlı şikâyet inceleme sayfası (yalnız ADMIN_KEY tanımlıysa); v10.01: kapatırken uyarı, kimlikle hesap silme (e-posta talepleri)
     var qs = {}; (req.url.split('?')[1] || '').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) qs[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); });
     if (!ADMIN_KEY || !qs.key || qs.key !== ADMIN_KEY || !Social) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('bulunamadı'); return; }
@@ -952,6 +964,7 @@ function handle(ws, me, m) {
   }
   if (m.t === 'peek') { handlePeek(r, me.seat, m); return; }
   if (m.t === 'skinUse') { handleSkinUse(r, me.seat, m); return; } // v9.91 (K116)
+  if (m.t === 'introUse') { handleIntroUse(r, me.seat, m); return; } // v10.06 (K159)
   if (m.t === 'slap') { handleSlap(r, me.seat, m); return; }
   if (m.t === 'prepDone') { // bütün insan oyuncular "Oyuna geç" dediyse ve bakış yoksa hazırlık biter, botlar başlar
     if (!r.prepDone) r.prepDone = {}; r.prepDone[me.seat] = true;

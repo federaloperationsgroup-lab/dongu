@@ -200,6 +200,7 @@ function summary(id, cb) { // rozet için: gelen istek sayısı + okunmamış me
 function brief(p) { return { id: p.id, name: p.name, avatar: Accounts.cleanAvatar(p.avatar), level: Accounts.levelOf(p.xp || 0).level }; }
 function briefs(ids, cb) { var out = {}, left = ids.length; if (!left) return cb(null, out); ids.forEach(function (id) { Accounts.get(id, function (e, p) { if (!e && p) out[id] = brief(p); if (--left === 0) cb(null, out); }); }); }
 function other(rel, me) { return rel.a === me ? rel.b : rel.a; }
+function venueOf(id) { var V = null; try { V = require('./venues.js'); } catch (e) {} return V && V.briefOf ? V.briefOf(id) : null; } // v10.06 (K151): arkadaşın kıraathanesi (ad, seviye) — yoksa null
 function relState(rel, me) { if (!rel) return 'none'; if (rel.state === 'friends') return 'friends'; return rel.by === me ? 'out' : 'in'; }
 
 // ---------- işlemler ----------
@@ -223,7 +224,7 @@ function opMe(me, body, cb) {
         var ids = {}; rels.forEach(function (r) { ids[other(r, me.id)] = 1; }); blocked.forEach(function (b) { ids[b] = 1; });
         briefs(Object.keys(ids), function (e4, B) { if (e4) return cb(e4);
           var friends = [], inn = [], out = [];
-          rels.forEach(function (r) { var o = other(r, me.id), b = B[o]; if (!b) return; var row = Object.assign({}, b, { at: r.at }); if (r.state === 'friends') { row.online = isOnline(o); row.unread = unread[o] || 0; friends.push(row); } else if (r.by === me.id) out.push(row); else inn.push(row); });
+          rels.forEach(function (r) { var o = other(r, me.id), b = B[o]; if (!b) return; var row = Object.assign({}, b, { at: r.at }); if (r.state === 'friends') { row.online = isOnline(o); row.unread = unread[o] || 0; row.venue = venueOf(o); friends.push(row); } else if (r.by === me.id) out.push(row); else inn.push(row); });
           friends.sort(function (p, q) { return (q.unread - p.unread) || ((q.online ? 1 : 0) - (p.online ? 1 : 0)) || p.name.localeCompare(q.name, 'tr'); });
           var tot = 0; Object.keys(unread).forEach(function (k) { tot += unread[k]; });
           cb(null, { version: VERSION, me: brief(me), friends: friends, in: inn, out: out, blocked: blocked.map(function (b) { return B[b] || { id: b, name: 'Oyuncu', avatar: null, level: 0 }; }), unreadTotal: tot, requests: inn.length });
@@ -233,7 +234,7 @@ function opState(me, body, cb) {
   targetOf(body, me, function (e, p) { if (e) { if (/Kendine/.test(e.message)) return cb(null, { state: 'self' }); return cb(e); }
     getRel(me.id, p.id, function (e2, rel) { if (e2) return cb(e2); blocksBetween(me.id, p.id, function (e3, bl) { if (e3) return cb(e3);
       var st = bl.xy ? 'blocked' : relState(rel, me.id); // karşı tarafın engeli söylenmez ('none' görünür; istek genel hatayla reddedilir)
-      unreadBy(me.id, function (e4, u) { cb(null, { state: st, target: brief(p), online: st === 'friends' ? isOnline(p.id) : undefined, unread: st === 'friends' ? ((u || {})[p.id] || 0) : 0 }); }); }); }); });
+      unreadBy(me.id, function (e4, u) { cb(null, { state: st, target: brief(p), online: st === 'friends' ? isOnline(p.id) : undefined, unread: st === 'friends' ? ((u || {})[p.id] || 0) : 0, venue: st === 'friends' ? venueOf(p.id) : undefined }); }); }); }); });
 }
 function opRequest(me, body, cb) {
   if (!rate('req:' + me.id, 10, 60000)) return cb(new Error('Çok sık istek gönderdin; biraz bekle.'));
@@ -343,4 +344,4 @@ function handleHttp(url, body, cb) {
 function onlineCount() { return Object.keys(online).length; }
 function stats(cb) { reportCount(function (n) { cb({ online: Object.keys(online).length, reports: n }); }); }
 
-module.exports = { VERSION: VERSION, deleteAccount: deleteAccount, retention: retention, exportAccount: exportAccount, /* v10.01 */ onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };
+module.exports = { friendsBetween: friendsBetween, /* v10.06 (K151) */ VERSION: VERSION, deleteAccount: deleteAccount, retention: retention, exportAccount: exportAccount, /* v10.01 */ onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };

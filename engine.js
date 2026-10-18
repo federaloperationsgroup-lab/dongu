@@ -765,7 +765,8 @@
       if (isKafa) p.hand = []; // kafa: kalan taşlar gruplar halinde bitti
       var detail = handDetail(g, g.cp, mult, winScore, type);
       finishHand(g, detail.map(function (d) { return d.score; }), g.cp, g.names[g.cp] + ' bitirdi — ' + type, detail);
-      return { playablePenalty: 0 };
+      if (g.handOver) g.handOver.finishTile = { id: tile.id, c: tile.c, n: tile.n, fake: !!tile.fake }; // v10.06 (K160): bitiş taşı ORTADA gösterilir (klasik okeyde ortaya kapatma; tester: "biterken ortaya atmak istiyorum"). Taş kayıtta atılanlarda kalır (106 taş korunur); arayüz köşede göstermez
+      return { playablePenalty: 0, finishTile: tile.id };
     }
     g.cp = (g.cp + 1) % 4;
     g.phase = 'pickup';

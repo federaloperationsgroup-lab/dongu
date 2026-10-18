@@ -160,6 +160,23 @@ function hostReward(v, info, now) { // info: {totalHands, humans:[ids], duration
   if (!v.quests.firstFriend) { v.quests.firstFriend = true; v.kasa += C.firstFriendMatch.gold; v.reputation += C.firstFriendMatch.reputation; lines.push('İlk arkadaş maçı: kasaya +' + C.firstFriendMatch.gold + ' altın, +' + C.firstFriendMatch.reputation + ' itibar'); }
   put(v); return { gold: gold, rep: rep, lines: lines };
 }
+function briefOf(ownerId) { var v = mem[ownerId]; return v ? { name: v.name, tier: v.tier, theme: v.theme } : null; } // v10.06 (K151): arkadaş listesi için kısa bilgi
+// v10.06 (K151): arkadaşın kıraathanesi — kod istemeden. Yalnız karşılıklı arkadaşlıkta ve iki yönde engel yokken; görünüm kodla girişle aynı (guestView).
+// Erişim kodla girişten geniş değildir: kod herkese açık kıraathaneyi açar; burada ayrıca arkadaşlık + engel denetimi var. Kapalı (ileride) kıraathane açılmaz.
+function friendVenue(p, fid, now, cb) {
+  if (fid === p.id) { var mv = ofOwner(p.id); return cb(null, { venue: mv ? ownerView(mv, now) : null }); }
+  var Social = null; try { Social = require('./social.js'); } catch (e) {}
+  if (!Social || !Social.friendsBetween) return cb(new Error('Arkadaşlık sistemi şu an kapalı; kıraathaneye kodla girebilirsin.'));
+  Social.friendsBetween(p.id, fid, function (e, ok, why) {
+    if (e) return cb(e);
+    if (!ok) return cb(new Error(why === 'notFriends' ? 'Bu oyuncu arkadaş listende değil; kıraathanesine kodla girebilirsin.' : why === 'blocked' ? 'Bu kişiyi engelledin; kıraathanesine gitmek için önce engeli kaldır.' : 'Bu oyuncunun kıraathanesine şu an giremezsin.'));
+    var fv = ofOwner(fid);
+    if (!fv) return cb(null, { venue: null, none: true });
+    if (fv.visibility && fv.visibility !== 'public' && fv.visibility !== 'friends') return cb(new Error('Bu kıraathane şu an ziyarete kapalı.'));
+    fv.stats.visits = (fv.stats.visits || 0) + 1; put(fv);
+    cb(null, { venue: guestView(fv, now) });
+  });
+}
 function listPublic(limit) { return Object.keys(mem).map(function (k) { return mem[k]; }).filter(function (v) { return v.visibility === 'public'; }).sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); }).slice(0, limit || 20).map(function (v) { return { code: v.code, name: v.name, theme: v.theme, tier: v.tier, ownerName: v.ownerName, reputation: v.reputation }; }); }
 
 // HTTP uçları: POST /api/venue/<işlem>, gövde: {id, token, ...}
@@ -170,6 +187,7 @@ function handleHttp(url, body, cb) {
   var cb0 = cb; cb = function (e, out) { release(); cb0(e, out); };
   Accounts.auth(body, function (e, p) {
     if (e) return cb(e);
+    if (op === 'get' && body.friend) return friendVenue(p, String(body.friend), now, function (e2, o2) { if (e2) return cb(e2); o2.player = Accounts.publicView(p); cb(null, o2); }); // v10.06 (K151)
     try {
       var v = ofOwner(p.id), out;
       switch (op) {
@@ -194,4 +212,4 @@ function handleHttp(url, body, cb) {
   });
   return true;
 }
-module.exports = { init: init, remove: remove, handleHttp: handleHttp, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };
+module.exports = { init: init, remove: remove, handleHttp: handleHttp, briefOf: briefOf, friendVenue: friendVenue, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };
