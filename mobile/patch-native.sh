@@ -14,6 +14,11 @@ android)
   # sürüm
   G=android/app/build.gradle
   sed -i "s/versionCode [0-9]*/versionCode $CODE/; s/versionName \"[^\"]*\"/versionName \"$V\"/" "$G"
+  # v10.08: test APK'sı hep aynı anahtarla imzalanır (debug-test.keystore; mağaza anahtarı değil) → yeni APK eskisinin üstüne kurulur, oyun hesabı silinmez
+  if [ -f debug-test.keystore ] && ! grep -q 'debug-test.keystore' "$G"; then
+    KS="$(pwd)/debug-test.keystore"
+    printf '\nandroid {\n    signingConfigs {\n        debug {\n            storeFile file("%s")\n            storePassword "android"\n            keyAlias "androiddebugkey"\n            keyPassword "android"\n        }\n    }\n}\n' "$KS" >> "$G"
+  fi
   # tam ekran tema (durum/gezinme çubuğu gizli): styles.xml'e windowFullscreen
   S=android/app/src/main/res/values/styles.xml
   if ! grep -q windowFullscreen "$S"; then sed -i 's#<style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">#<style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">\n        <item name="android:windowFullscreen">true</item>#' "$S"; fi
