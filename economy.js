@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    version: 'dongu-economy-1.9',           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
+    version: 'dongu-economy-2.0',           // 2.0 (v10.09, K171–K173): gizli botlu Hızlı Katıl tam ödül + her Sosyal maç lig maçı, ligde Bak serbest, günlük lig sınırı 20, 1 El/12 El lig çarpanı, antrenman XP 15;           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -19,7 +19,7 @@
     matchBonus: { 6: { gold: 30, xp: 15 }, 12: { gold: 60, xp: 30 } }, // maçın bütün ellerine uygun katılana
     dailyBands: [[24, 1], [48, 0.25]],      // günün ilk 24 uygun insan eli tam, 25–48 %25, sonrası 0 (oyun sürer)
     humanCoef: { 2: 0.5, 3: 0.75, 4: 1 },   // masadaki uygun insan sayısı katsayısı; 1 insan = antrenman
-    training: { handsPerDay: 5, gold: 4, xp: 10 }, // botlara karşı (tek insan) antrenman: günde ilk 5 el
+    training: { handsPerDay: 5, gold: 4, xp: 15 }, // botlara karşı (tek insan) antrenman: günde ilk 5 el — v10.09 (K173, K107-A): XP 10 → 15
     loginGold: 40,                          // günlük giriş (UTC günü)
     dailyQuests: [[2, 30, 30], [4, 40, 40], [6, 60, 50]],      // [uygun insan eli, altın, XP] — birikimli
     weeklyQuests: [[24, 200, 150], [48, 300, 200]],
@@ -94,11 +94,12 @@
     // Aynı oyuncu grubuyla günde en çok 3 maç puanlanır. Miktarlar ilk sürüm: canlı veriyle ayarlanacak. Altın/XP vermez (ekonomiye dokunmaz).
     league: {
       base: [20, 8, -8, -20],               // sıraya göre (6 El için)
-      handsMult: { 1: 0.25, 6: 1, 12: 1.5 }, // 1 El: ±5/±2 · 6 El: ±20/±8 · 12 El: ±30/±12
+      handsMult: { 1: 0.15, 6: 1, 12: 1.8 }, // v10.09 (K173): dakika başına yakın puan — 1 El: ±3/±1 · 6 El: ±20/±8 · 12 El: ±36/±14 (önce 1 El dakikada iki kat veriyordu)
       minHumans: 3,
       sameGroupDaily: 3,
       strength: { per: 200, slope: 0.25, min: 0.75, max: 1.25 }, // rakiplerin ortalaması 200 puan yüksekse kazanç ×1,25, kayıp ×0,75 (tersi de)
-      peekOff: true,                        // D7: lig maçında Çaktırmadan Bak kapalı (bilgi avantajı)
+      peekOff: false,                       // v10.09 (K173, kullanıcı kararı): lig maçında Çaktırmadan Bak ve Yoklama serbest, puan sayılır (önce D7: kapalı)
+      dailyMax: 20,                         // v10.09 (K173): günde en çok 20 lig maçı puanlanır (her Sosyal Hızlı Katıl maçı lig maçı olduğu için)
       top: 50, pastSeasons: 12
     },
     stakeFeeBps: 500,                       // havuzun %5'i sistem gideri
@@ -439,9 +440,10 @@
   function settleLeague(p, opts, now) {
     var L = leagueOf(p, now), day = dayKey(now), lines = [], C = CONFIG.league, lab = seasonLabel(L.season);
     if (!L.groups || L.groups.day !== day) L.groups = { day: day, n: {} };
-    var g = String(opts.group || ''), used = L.groups.n[g] || 0;
+    var g = String(opts.group || ''), used = L.groups.n[g] || 0, dayAll = L.groups.all || 0;
+    if (C.dailyMax && dayAll >= C.dailyMax) { lines.push('Lig: bugün ' + C.dailyMax + ' lig maçı puanlandı; sonraki maçlar yarın yine puan kazandırır (' + lab + ')'); return { counted: false, delta: 0, points: L.points, lines: lines }; } // v10.09 (K173): günlük lig maçı sınırı
     if (used >= C.sameGroupDaily) { lines.push('Lig: bu oyuncularla bugün ' + C.sameGroupDaily + ' maç puanlandı; bu maç puansız (' + lab + ')'); return { counted: false, delta: 0, points: L.points, lines: lines }; }
-    L.groups.n[g] = used + 1;
+    L.groups.n[g] = used + 1; L.groups.all = dayAll + 1;
     var ff = !!(opts.forfeits && opts.forfeits[opts.me]), base = leagueBase(opts.ranks, opts.me, opts.forfeits);
     var d = leagueDelta(L.points, opts.oppPts || [], base, opts.totalHands), before = L.points;
     L.points = Math.max(0, L.points + d.delta); L.matches = (L.matches || 0) + 1;

@@ -804,8 +804,9 @@
     return s;
   }
 
-  function botChooseDiscard(g, p) {
-    var hand = p.hand, best = null, bestS = -1e9;
+  function weakOf(g, seat) { var w = g.botWeak && g.botWeak[seat]; return w === true ? 1 : (+w || 0); } // v10.09 (K171): bahisli masadaki gizli bot zayıf oynar (kullanıcı kararı); 0 normal … 1 en zayıf
+  function botChooseDiscard(g, p, weak) {
+    var hand = p.hand, best = null, bestS = -1e9, scored = [];
     var ok = g.ok;
     for (var i = 0; i < hand.length; i++) {
       var t = hand[i];
@@ -815,6 +816,11 @@
       if (isJoker(t, ok)) s -= 100;
       if (discardIsPlayable(g, p, t)) s -= (p.opened ? 40 : 15); // işlek taş atma cezasından kaçın (açılmamışken ceza 10 puan: el planını bozmaktan daha ucuz olabilir)
       if (s > bestS) { bestS = s; best = t; }
+      if (!isJoker(t, ok)) scored.push({ t: t, s: s });
+    }
+    if (weak && scored.length > 2 && Math.random() < 0.35 * weak) { // zayıf bot: arada en iyi olmayan bir taşı atar (en iyi 5'ten biri)
+      scored.sort(function (a, b) { return b.s - a.s; }); var alt = scored.slice(1, 6);
+      if (alt.length) return alt[Math.floor(Math.random() * alt.length)].t;
     }
     return best;
   }
@@ -828,6 +834,7 @@
     if (p.opened && !outOfTurn) {
       for (var i = 0; i < g.table.length; i++) if (canAddTo(g, i, [tile])) return true;
     }
+    var wk = weakOf(g, player); if (wk) { if (Math.random() < 0.3 * wk) return false; return outOfTurn ? after - before >= 9 + Math.round(4 * wk) : after - before >= 2 + Math.round(2 * wk); } // zayıf bot taşı daha az görür
     if (outOfTurn) return after - before >= 9; // bir grup tamamlıyor / görev açıyor
     return after - before >= 2;
   }
@@ -845,7 +852,7 @@
   }
 
   function botPlay(g) {
-    var cp = g.cp, p = g.players[cp], ok = g.ok;
+    var cp = g.cp, p = g.players[cp], ok = g.ok, weak = weakOf(g, cp);
     var keep = g.botCalm ? 3 : 1; // v9.89 (K111): eğitim botu dersi bozmaz — eli bitirmez (en az 3 taş tutar), kafa görevinde bitirmez
     if (!g.task.req) { // kafa
       if (g.botCalm) { // sakin bot: eli bitirmeyecek bir taş at (kalan el tam dizilmesin); hepsi bitiriyorsa (olağanüstü) ilk taşı at
@@ -858,13 +865,15 @@
         var rest = p.hand.slice(0, i).concat(p.hand.slice(i + 1));
         if (rest.length && partition(rest, ok, 0)) { if (!fin || isJoker(p.hand[i], ok)) fin = p.hand[i]; }
       }
-      actDiscard(g, fin || botChooseDiscard(g, p));
+      if (weak && fin && Math.random() < 0.35 * weak) fin = null; // zayıf bot bitirmeyi kaçırabilir
+      actDiscard(g, fin || botChooseDiscard(g, p, weak));
       return;
     }
     if (!p.opened) {
       var grs = g.turnNo >= 4 ? findTaskGroups(p.hand, ok, g.task) : null;
+      if (grs && weak && Math.random() < 0.5 * weak) grs = null; // zayıf bot açılmayı geciktirir
       if (grs) actOpen(g, grs.map(function (m) { return m.tiles; }));
-      actDiscard(g, botChooseDiscard(g, p));
+      actDiscard(g, botChooseDiscard(g, p, weak));
       return;
     }
     // açılmış: olabildiğince yere koy / işle, 1 taş kalsın
@@ -892,7 +901,7 @@
       }
       if (!added) break;
     }
-    actDiscard(g, botChooseDiscard(g, p));
+    actDiscard(g, botChooseDiscard(g, p, weak));
   }
 
   function botStep(g) { // bir adım
