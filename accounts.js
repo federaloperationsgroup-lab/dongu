@@ -137,7 +137,7 @@ function freeLeft(p, id) { return (p && p.freeSkins && p.freeSkins[id]) || 0; }
 function useFreeSkin(p, id) { if (!(freeLeft(p, id) > 0)) return false; p.freeSkins[id]--; p.freeUsed = p.freeUsed || {}; p.freeUsed[id] = Date.now(); return true; }
 function publicView(p) {
   var now = Date.now(), lv = levelOf(p.xp), ec = Economy.summary(p, now);
-  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, consent: p.consent ? p.consent.v : null, consentReq: CONSENT_V, notices: p.notices || [], tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned), muteUntil: p.muteUntil > now ? p.muteUntil : 0, nameLockUntil: p.nameLockUntil > now ? p.nameLockUntil : 0, /* v10.11 (K178) */ badges: (p.badges || []).slice(-6), badgeNew: p.badgeNew || null }; // badges (v10.09, K174): sezon sonu lig rozetleri (ilk 3) // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
+  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, prefs: p.prefs || {}, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, consent: p.consent ? p.consent.v : null, consentReq: CONSENT_V, notices: p.notices || [], tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned), muteUntil: p.muteUntil > now ? p.muteUntil : 0, nameLockUntil: p.nameLockUntil > now ? p.nameLockUntil : 0, /* v10.11 (K178) */ badges: (p.badges || []).slice(-6), badgeNew: p.badgeNew || null }; // badges (v10.09, K174): sezon sonu lig rozetleri (ilk 3) // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
 }
 function takeView(p) { var v = publicView(p), dirty = false; if (p.skinGiftNew) { delete p.skinGiftNew; dirty = true; } if (p.badgeNew) { delete p.badgeNew; dirty = true; } return { view: v, dirty: dirty }; } // v10.09: yeni lig rozeti bildirimi de bir kez // hoş geldin bildirimi bir kez: bayrak ilk görünümle düşer (kayıt çağıranın tek yazmasıyla)
 function create(body, cb) {
@@ -178,6 +178,7 @@ function me(body, cb) {
     var hadArenas = !!p.arenas; if (Economy.syncArenas(p).length || !hadArenas) changed = true; // v9.86: koşulu sağlanan mekânlar hesaba yazılır (eski hesap: ilk girişte)
     if (body.consent) { var cs = cleanConsent(body.consent); if (cs && (!p.consent || p.consent.v !== cs.v)) { p.consent = cs; changed = true; } } // v10.01: yasal metin onayı (sürüm değişince yeniden alınır)
     if (body.ackNotices && p.notices && p.notices.length) { p.notices = []; changed = true; } // v10.01: yönetici uyarıları görüldü
+    if (body.prefs && typeof body.prefs === 'object' && typeof body.prefs.skins === 'boolean') { p.prefs = p.prefs || {}; if (p.prefs.skins !== body.prefs.skins) { p.prefs.skins = body.prefs.skins; changed = true; } } // v10.12 (K181, denge P3): Skinler açık/kapalı — oyuncunun kendi tercihi, hesapta
     var nameFix = null, nowN = Date.now(); // v10.11 (K178): ad süzgeci + yönetici sıfırlamasından sonra 24 saat ad kilidi
     if (body.name) { var n = cleanName(body.name); if (n !== p.name) {
       if (p.nameLockUntil && p.nameLockUntil > nowN) nameFix = { name: p.name, why: 'Adın yönetici tarafından değiştirildi (topluluk kuralları); ' + hhmm(p.nameLockUntil) + ' saatine kadar yeniden değiştirilemez.' };
@@ -408,9 +409,34 @@ function matchRecords(limit, cb) { // son kayıtlar (özet için); en çok limit
   if (DB) { DB.query('SELECT data FROM match_log ORDER BY id DESC LIMIT $1', [limit]).then(function (r) { cb(null, r.rows.map(function (x) { return typeof x.data === 'string' ? JSON.parse(x.data) : x.data; })); }).catch(function (e) { cb(e, []); }); return; }
   try { var lines = fs.readFileSync(MLOG, 'utf8').trim().split('\n'); var out = []; for (var i = lines.length - 1; i >= 0 && out.length < limit; i--) { try { out.push(JSON.parse(lines[i])); } catch (e) {} } cb(null, out); } catch (e) { cb(null, []); }
 }
+// v10.12 (K182): /olcum oyuncu dağılımı — mekân eşikleri ve lig puanlarını canlı veriyle ayarlamak için (gizli botlar hariç)
+function allHumans(cb) {
+  if (DB) { DB.query("SELECT data FROM players WHERE (data->>'bot') IS DISTINCT FROM 'true' LIMIT 20000").then(function (r) { cb(null, r.rows.map(function (x) { return typeof x.data === 'string' ? JSON.parse(x.data) : x.data; })); }).catch(function (e) { cb(e, []); }); return; }
+  cb(null, Object.keys(mem).map(function (k) { return mem[k]; }).filter(function (p) { return p && !p.bot; }));
+}
+function playerSummary(cb) {
+  allHumans(function (e, ps) {
+    var now = Date.now(), wk = now - 7 * 86400000, out = { oyuncu: ps.length, sonHaftaAktif: 0, seviye: {}, gercekEl: { '0': 0, '1-5': 0, '6-17': 0, '18-47': 0, '48-99': 0, '100-249': 0, '250+': 0 }, toplamEl: { '0': 0, '1-5': 0, '6-11': 0, '12-29': 0, '30-99': 0, '100+': 0 }, acikMekan: {}, enYuksekMekanSayisi: {}, lig: { puanli: 0, puan: { '0': 0, '1-19': 0, '20-49': 0, '50-99': 0, '100-199': 0, '200+': 0 }, macOrt: 0 }, altinOrt: 0, altin: { '0-99': 0, '100-499': 0, '500-1999': 0, '2000-9999': 0, '10000+': 0 } };
+    var bucket = function (n, edges) { for (var i = 0; i < edges.length; i++) if (n <= edges[i][0]) return edges[i][1]; return edges[edges.length - 1][1]; };
+    var lp = 0, lm = 0, gold = 0;
+    ps.forEach(function (p) {
+      if ((p.lastSeen || p.updated || 0) > wk) out.sonHaftaAktif++;
+      var lv = levelOf(p.xp || 0).level; out.seviye[lv] = (out.seviye[lv] || 0) + 1;
+      var st = p.stats || {}, real = st.real || 0, hands = st.hands || 0;
+      out.gercekEl[bucket(real, [[0, '0'], [5, '1-5'], [17, '6-17'], [47, '18-47'], [99, '48-99'], [249, '100-249'], [1e9, '250+']])]++;
+      out.toplamEl[bucket(hands, [[0, '0'], [5, '1-5'], [11, '6-11'], [29, '12-29'], [99, '30-99'], [1e9, '100+']])]++;
+      var ar = p.arenas || ['koy']; ar.forEach(function (t) { out.acikMekan[t] = (out.acikMekan[t] || 0) + 1; }); var n = ar.length; out.enYuksekMekanSayisi[n] = (out.enYuksekMekanSayisi[n] || 0) + 1;
+      var L = p.league; if (L && L.matches) { out.lig.puanli++; lp += L.points || 0; lm += L.matches; out.lig.puan[bucket(L.points || 0, [[0, '0'], [19, '1-19'], [49, '20-49'], [99, '50-99'], [199, '100-199'], [1e9, '200+']])]++; }
+      var c = p.coins || 0; gold += c; out.altin[bucket(c, [[99, '0-99'], [499, '100-499'], [1999, '500-1999'], [9999, '2000-9999'], [1e9, '10000+']])]++;
+    });
+    out.lig.macOrt = out.lig.puanli ? +(lm / out.lig.puanli).toFixed(1) : 0; out.lig.puanOrt = out.lig.puanli ? Math.round(lp / out.lig.puanli) : 0; out.altinOrt = ps.length ? Math.round(gold / ps.length) : 0;
+    out.esikler = Economy.CONFIG.arenas.map(function (a) { return { mekan: a.theme, seviye: a.level, el: a.hands || null, gercekEl: a.real || null, acan: out.acikMekan[a.theme] || 0 }; });
+    cb(null, out);
+  });
+}
 function matchSummary(cb) { // /olcum: görev başına açılma, el uzunluğu, bitiş türleri, çarpanlar; maç tamamlama ve rövanş oranı
   matchRecords(5000, function (e, recs) {
-    var byTask = {}, tot = { hands: 0, matches: 0, matchesFinished: 0, rematches: 0, leagueMatches: 0, humansHands: 0, leftHands: 0, afkHands: 0 };
+    var byTask = {}, tot = { hands: 0, matches: 0, matchesFinished: 0, rematches: 0, leagueMatches: 0, humansHands: 0, leftHands: 0, afkHands: 0, peeks: 0, slaps: 0, peekHands: 0, firstDay: null, lastDay: null }; // v10.12: bakış / tokat sayıları ve kayıt aralığı
     recs.forEach(function (r) {
       if (r.k === 'match') { tot.matches++; if (r.finished) tot.matchesFinished++; if (r.rematch) tot.rematches++; if (r.league) tot.leagueMatches++; return; }
       if (r.k !== 'hand') return; tot.hands++;
@@ -418,10 +444,11 @@ function matchSummary(cb) { // /olcum: görev başına açılma, el uzunluğu, b
       t.hands++; t.openedN += r.openedN || 0; (r.openRounds || []).forEach(function (x) { t.openRound += x; t.openRoundN++; }); t.turns += r.turns || 0; t.secs += r.secs || 0;
       var f = (r.finish || '').split(' — ').pop().replace(/\s*\(.*$/, ''); /* "Mehmet bitirdi — Normal bitiş" → "Normal bitiş" */ t.finish[f] = (t.finish[f] || 0) + 1; if (r.mult === 2) t.mult2++; if (r.mult === 4) t.mult4++; if (r.winnerSeat == null) t.deckOut++;
       if (r.humans >= 2) tot.humansHands++; if (r.leftN) tot.leftHands++; if (r.afkActs) tot.afkHands++;
+      tot.peeks += r.peeks || 0; tot.slaps += r.slaps || 0; if (r.peeks) tot.peekHands++; var day = (r.at || '').slice(0, 10); if (day) { if (!tot.firstDay || day < tot.firstDay) tot.firstDay = day; if (!tot.lastDay || day > tot.lastDay) tot.lastDay = day; }
     });
-    var out = { toplam: tot, gorevler: {} };
+    var out = { toplam: tot, gorevler: {}, oyuncular: null };
     Object.keys(byTask).forEach(function (k) { var t = byTask[k]; out.gorevler[k] = { el: t.hands, acilanOyuncuOrt: +(t.openedN / t.hands).toFixed(2), acilmaDevriOrt: t.openRoundN ? +(t.openRound / t.openRoundN).toFixed(1) : null, elTurOrt: +(t.turns / t.hands).toFixed(1), elSnOrt: Math.round(t.secs / t.hands), x2: t.mult2, x4: t.mult4, desteBitti: t.deckOut, bitis: t.finish }; });
-    cb(null, out);
+    playerSummary(function (e2, ps) { out.oyuncular = ps || null; cb(null, out); }); // v10.12 (K182)
   });
 }
 function ownedIntroVals(p) { var g = Economy.charGrants(p.owned || []), vals = g.intros.slice(); Object.keys(catalog).forEach(function (id) { var c = catalog[id]; if (c.cat === 'intro' && p.owned.indexOf(id) >= 0 && vals.indexOf(c.val) < 0) vals.push(c.val); }); return vals; } // sahip olunan + karakterle açılan Masa Giriş Skinleri (v9.88)
