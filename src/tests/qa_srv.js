@@ -4,10 +4,11 @@ const WebSocket = require('ws');
 const SRVDIR = process.env.SRVDIR || '/home/claude/okey/server';
 function start(port, env, logFile) {
   for (const f of ['players.json', 'venues.json', 'rooms.json', 'rooms.json.tmp', 'matches.jsonl', 'meta.json', 'social.json', 'dm.json', 'reports.jsonl']) { try { fs.unlinkSync(path.join(SRVDIR, 'data', f)); } catch (e) {} }
-  const out = logFile ? fs.openSync(logFile, 'w') : 'ignore';
+  if (logFile) { try { fs.unlinkSync(logFile); } catch (e) {} } const out = logFile ? fs.openSync(logFile, 'a') : 'ignore'; // 'a': stdout+stderr aynı dosyaya karışmadan (konum paylaşımı)
   const srv = spawn('node', ['server.js'], { cwd: SRVDIR, env: Object.assign({}, process.env, { PORT: String(port), NODE_PATH: '/opt/npm-tools/node_modules' }, env || {}), stdio: ['ignore', out, out] });
-  srv.port = port; return srv;
+  srv.port = port; CHILDREN.push(srv); return srv;
 }
+const CHILDREN = []; process.on('exit', () => { CHILDREN.forEach((c) => { try { if (c.exitCode == null) c.kill('SIGKILL'); } catch (e) {} }); }); // çöken test sunucuyu arkada bırakmasın (port çakışması)
 function stop(p) { return new Promise((r) => { if (!p || p.exitCode != null) return r(); p.on('exit', r); p.kill('SIGTERM'); setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} r(); }, 4000); }); }
 function get(port, p) { return new Promise((res) => http.get({ host: '127.0.0.1', port, path: p }, (r) => { let b = ''; r.on('data', (d) => (b += d)); r.on('end', () => res({ status: r.statusCode, body: b })); }).on('error', () => res({ status: 0, body: '' }))); }
 function post(port, p, body, ctype) { return new Promise((res) => { const d = typeof body === 'string' ? body : JSON.stringify(body || {}); const q = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', headers: { 'Content-Type': ctype || 'application/json', 'Content-Length': Buffer.byteLength(d) } }, (r) => { let b = ''; r.on('data', (x) => (b += x)); r.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) {} res({ status: r.statusCode, body: b, json: j }); }); }); q.on('error', () => res({ status: 0, body: '', json: null })); q.end(d); }); }
