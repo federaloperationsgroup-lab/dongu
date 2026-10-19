@@ -6,6 +6,7 @@
 function defaultVenueName(n) { n = String(n || 'Misafir').trim(); var a = n + ' Kıraathanesi'; if (a.length <= 24) return a; var b = n + ' Kahvesi'; if (b.length <= 24) return b; return n.slice(0, 16).trim() + ' Kahvesi'; }
 var crypto = require('crypto'), fs = require('fs'), path = require('path');
 var Economy = require('./economy.js');
+var Mod = require('./moderation.js'); // v10.11 (K178): ad süzgeci
 var C = Economy.CONFIG.venue;
 
 var DB = null, mem = {}, byCode = {}, FILE = path.join(__dirname, 'data', 'venues.json'), saveTimer = null, Accounts = null;
@@ -71,8 +72,9 @@ function create(p, body) {
   syncStations(v);
   put(v); return v;
 }
-function cleanName(raw) { var name = String(raw || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim(); if (name.length < 3) throw new Error('Mekân adı en az 3 karakter olmalı.'); if (name.length > 24) throw new Error('Mekân adı en çok 24 karakter olabilir (' + name.length + ' yazdın).'); return name; }
+function cleanName(raw) { var name = String(raw || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim(); if (name.length < 3) throw new Error('Mekân adı en az 3 karakter olmalı.'); if (Mod.badName(name)) throw new Error('Bu ad kullanılamaz (topluluk kuralları): başka bir ad yaz.'); if (name.length > 24) throw new Error('Mekân adı en çok 24 karakter olabilir (' + name.length + ' yazdın).'); return name; }
 function rename(v, body) { // sahibi mekân adını değiştirir (ücretsiz; aynı kurallar: 3–24 karakter)
+  if (v.nameLockUntil && v.nameLockUntil > Date.now()) throw new Error('Kıraathanenin adı yönetici tarafından değiştirildi (topluluk kuralları); 24 saat yeniden değiştirilemez.'); // v10.11 (K178)
   var name = cleanName(body.name); if (name === v.name) throw new Error('Ad zaten bu.');
   v.name = name; v.nameFixed = true; put(v); return v;
 }
@@ -177,6 +179,23 @@ function friendVenue(p, fid, now, cb) {
     cb(null, { venue: guestView(fv, now) });
   });
 }
+// ---- v10.11 (K178): Keşfet — herkese açık kıraathaneler (popüler / yeni); yönetici "keşfette gizle" diyebilir; kendi ve engellediklerin listelenmez ----
+var liveCount = null; function setLiveCount(fn) { liveCount = fn; }
+function discoverRow(v) { var t = Economy.venueTier(v.tier); return { code: v.code, name: v.name, theme: v.theme, tier: v.tier, tierName: t.name, tables: t.tables, ownerName: v.ownerName, reputation: v.reputation || 0, visits: (v.stats && v.stats.visits) || 0, matches: (v.stats && v.stats.matches) || 0, live: liveCount ? liveCount(v.code) : 0, created: v.created || 0 }; }
+function discover(p, tab, blocked) {
+  var rows = Object.keys(mem).map(function (k) { return mem[k]; }).filter(function (v) { return v.visibility === 'public' && !v.hiddenDiscover && v.ownerId !== p.id && (blocked || []).indexOf(v.ownerId) < 0; }).map(discoverRow);
+  var score = function (x) { return x.reputation + Math.min(400, x.visits) * 0.5 + x.matches * 3 + (x.tier - 1) * 25 + x.live * 15; };
+  if (tab === 'new') rows.sort(function (a, b) { return b.created - a.created; }); else rows.sort(function (a, b) { return score(b) - score(a) || b.created - a.created; });
+  return rows.slice(0, 24);
+}
+function adminOp(ownerId, op, val) { // yönetim: kıraathane adını sıfırla (24 saat kilit) · keşfette gizle / göster · sahip adı; sonuç metni ya da null (kıraathane yok)
+  var v = mem[ownerId]; if (!v) return null;
+  if (op === 'mekan_ad') { var old = v.name; v.name = 'Kıraathane ' + v.code; v.nameFixed = true; v.nameLockUntil = Date.now() + 24 * 3600000; put(v); return { text: 'kıraathane adı sıfırlandı ("' + old + '" → "' + v.name + '", 24 saat kilitli)', name: v.name }; }
+  if (op === 'kesif_gizle') { v.hiddenDiscover = true; put(v); return { text: 'kıraathane keşfette gizli (' + v.name + ')' }; }
+  if (op === 'kesif_goster') { v.hiddenDiscover = false; put(v); return { text: 'kıraathane keşfette görünür (' + v.name + ')' }; }
+  if (op === 'sahip_ad') { if (val) v.ownerName = String(val).slice(0, 14); put(v); return { text: 'kıraathane sahibi adı güncellendi' }; }
+  return null;
+}
 function listPublic(limit) { return Object.keys(mem).map(function (k) { return mem[k]; }).filter(function (v) { return v.visibility === 'public'; }).sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); }).slice(0, limit || 20).map(function (v) { return { code: v.code, name: v.name, theme: v.theme, tier: v.tier, ownerName: v.ownerName, reputation: v.reputation }; }); }
 
 // HTTP uçları: POST /api/venue/<işlem>, gövde: {id, token, ...}
@@ -187,6 +206,9 @@ function handleHttp(url, body, cb) {
   var cb0 = cb; cb = function (e, out) { release(); cb0(e, out); };
   Accounts.auth(body, function (e, p) {
     if (e) return cb(e);
+    if (op === 'discover') { var Soc = null; try { Soc = require('./social.js'); } catch (e0) {} var tab = body.tab === 'new' ? 'new' : 'popular'; // v10.11 (K178)
+      var fin = function (bl) { cb(null, { venues: discover(p, tab, bl), tab: tab, mine: !!ofOwner(p.id), player: Accounts.publicView(p) }); };
+      if (Soc && Soc.blockedIds) return Soc.blockedIds(p.id, function (eb, bl) { fin(eb ? [] : bl); }); return fin([]); }
     if (op === 'get' && body.friend) return friendVenue(p, String(body.friend), now, function (e2, o2) { if (e2) return cb(e2); o2.player = Accounts.publicView(p); cb(null, o2); }); // v10.06 (K151)
     try {
       var v = ofOwner(p.id), out;
@@ -212,4 +234,4 @@ function handleHttp(url, body, cb) {
   });
   return true;
 }
-module.exports = { init: init, remove: remove, handleHttp: handleHttp, briefOf: briefOf, friendVenue: friendVenue, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };
+module.exports = { setLiveCount: setLiveCount, adminOp: adminOp, discover: discover, /* v10.11 (K178) */ init: init, remove: remove, handleHttp: handleHttp, briefOf: briefOf, friendVenue: friendVenue, ofOwner: ofOwner, ofCode: ofCode, ownerView: ownerView, guestView: guestView, hostReward: hostReward, put: put, fixLegacyName: fixLegacyName, defaultVenueName: defaultVenueName };

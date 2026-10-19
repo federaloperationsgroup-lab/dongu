@@ -3,6 +3,7 @@
 'use strict';
 var crypto = require('crypto'), fs = require('fs'), path = require('path');
 var Economy = require('./economy.js'); // ödül, seviye, görev, günlük giriş, havuz: tek ekonomi modülü (sürümlü CONFIG)
+var Mod = require('./moderation.js'); // v10.11 (K178): ad süzgeci
 
 var START_COINS = Economy.CONFIG.welcomeGold;
 var RESULT_GAP = parseInt(process.env.RESULT_GAP_MS) || 30000; // antrenman eli bildirimi arası en az süre
@@ -105,6 +106,8 @@ function addNotice(id, text, cb) { // v10.01: yönetici uyarısı — oyuncu bir
 function newId() { return 'p_' + crypto.randomBytes(6).toString('hex'); }
 function newToken() { return crypto.randomBytes(18).toString('hex'); }
 function cleanName(n) { n = String(n || 'Oyuncu').replace(/[<>]/g, '').trim().slice(0, 14); return n || 'Oyuncu'; }
+function placeholderName() { return 'Oyuncu ' + (1000 + Math.floor(Math.random() * 9000)); } // v10.11 (K178): uygunsuz ad / yönetici sıfırlaması
+function hhmm(t) { var d = new Date(t + 3 * 3600000); return ('0' + d.getUTCDate()).slice(-2) + '.' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + ' ' + ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2); } // Türkiye saati
 // Avatar şeması (v9.69): açık alan listesi; bilinmeyen alanlar düşer. Kozmetik yuvalar: hair, beard, outfit, acc, full + gardırop yuvaları (moustache, pants, headwear, eyewear, necklace, earring, wrist)
 var AVATAR_KEYS = ['v', 'name', 'gender', 'skin', 'hair', 'hairColor', 'beard', 'outfit', 'acc', 'full', 'intro', 'moustache', 'pants', 'headwear', 'eyewear', 'necklace', 'earring', 'wrist', 'makeup']; // v9.96: makyaj yuvası
 var SLOT_DEFAULT = { hair: 'kisa', beard: 'yok', outfit: 'mont-mavi', acc: 'yok', full: 'yok', moustache: 'yok', pants: 'yok', headwear: 'yok', eyewear: 'yok', necklace: 'yok', earring: 'yok', wrist: 'yok', makeup: 'yok' };
@@ -134,17 +137,18 @@ function freeLeft(p, id) { return (p && p.freeSkins && p.freeSkins[id]) || 0; }
 function useFreeSkin(p, id) { if (!(freeLeft(p, id) > 0)) return false; p.freeSkins[id]--; p.freeUsed = p.freeUsed || {}; p.freeUsed[id] = Date.now(); return true; }
 function publicView(p) {
   var now = Date.now(), lv = levelOf(p.xp), ec = Economy.summary(p, now);
-  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, consent: p.consent ? p.consent.v : null, consentReq: CONSENT_V, notices: p.notices || [], tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned), badges: (p.badges || []).slice(-6), badgeNew: p.badgeNew || null }; // badges (v10.09, K174): sezon sonu lig rozetleri (ilk 3) // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
+  return { id: p.id, name: p.name, avatar: p.avatar, coins: p.coins, xp: p.xp, level: lv.level, xpInto: lv.into, xpNeed: lv.need, owned: p.owned, stats: p.stats, econ: ec, bonusReady: !ec.login, bonusIn: ec.login ? Math.max(0, ec.nextDayAt - now) : 0, consent: p.consent ? p.consent.v : null, consentReq: CONSENT_V, notices: p.notices || [], tutorialRewarded: !!p.tutorialRewarded, mode: mode, economyVersion: Economy.CONFIG.version, freeSkins: p.freeSkins || {}, skinGiftNew: !!p.skinGiftNew, arenas: (p.arenas || ['koy']).slice(), league: Economy.leagueSummary(p, now), skinUses: p.skinUses || {}, grants: Economy.charGrants(p.owned), muteUntil: p.muteUntil > now ? p.muteUntil : 0, nameLockUntil: p.nameLockUntil > now ? p.nameLockUntil : 0, /* v10.11 (K178) */ badges: (p.badges || []).slice(-6), badgeNew: p.badgeNew || null }; // badges (v10.09, K174): sezon sonu lig rozetleri (ilk 3) // skinUses/grants (v9.88): satın alınmış kullanım hakları, karakter sahipliğiyle ücretsiz skinler // arenas (v9.86): açılmış mekânlar · league (v9.87): bu sezonun Döngü Puanı özeti
 }
 function takeView(p) { var v = publicView(p), dirty = false; if (p.skinGiftNew) { delete p.skinGiftNew; dirty = true; } if (p.badgeNew) { delete p.badgeNew; dirty = true; } return { view: v, dirty: dirty }; } // v10.09: yeni lig rozeti bildirimi de bir kez // hoş geldin bildirimi bir kez: bayrak ilk görünümle düşer (kayıt çağıranın tek yazmasıyla)
 function create(body, cb) {
-  var p = { id: newId(), token: newToken(), name: cleanName(body.name), avatar: cleanAvatar(body.avatar), coins: START_COINS, xp: 0, owned: [], lastBonus: 0, stats: { hands: 0, matches: 0, wins: 0 }, created: Date.now(), lastSeen: Date.now() };
+  var nm0 = cleanName(body.name), bad0 = Mod.badName(nm0); // v10.11 (K178): uygunsuz adla hesap açılmaz → "Oyuncu 1234" (istemci bu adı alır)
+  var p = { id: newId(), token: newToken(), name: bad0 ? placeholderName() : nm0, avatar: cleanAvatar(body.avatar), coins: START_COINS, xp: 0, owned: [], lastBonus: 0, stats: { hands: 0, matches: 0, wins: 0 }, created: Date.now(), lastSeen: Date.now() };
   // cihazdaki eski dolap (prototipten geçiş): yalnızca ücretsiz ya da zaten var olan ürünler aktarılır, jeton aktarılmaz
   if (Array.isArray(body.owned)) body.owned.slice(0, 60).forEach(function (id) { var c = catalog[id]; if (typeof id === 'string' && c && (c.free || !c.price) && p.owned.indexOf(id) < 0) p.owned.push(id); });
   p.consent = cleanConsent(body.consent); // v10.01
   p.charMig = 1; // v9.88: yeni hesap ücretsiz dönemi görmedi; geçiş temizliği uygulanmaz (ilk /api/me satın alınmış karakteri silmesin)
-  ensureSkinGift(p); Economy.syncArenas(p);
-  var tv = takeView(p);
+  ensureSkinGift(p); Economy.syncArenas(p); if (bad0 && p.avatar) p.avatar.name = p.name;
+  var tv = takeView(p); if (bad0) tv.view.nameFix = { name: p.name, why: 'Bu ad kullanılamaz (topluluk kuralları). Adın "' + p.name + '" oldu; Profil\'den değiştirebilirsin.' };
   put(p, function (e) { if (e) return cb(e); cb(null, { id: p.id, token: p.token, player: tv.view }); });
 }
 function auth(body, cb) { // id + token doğrulaması
@@ -174,14 +178,19 @@ function me(body, cb) {
     var hadArenas = !!p.arenas; if (Economy.syncArenas(p).length || !hadArenas) changed = true; // v9.86: koşulu sağlanan mekânlar hesaba yazılır (eski hesap: ilk girişte)
     if (body.consent) { var cs = cleanConsent(body.consent); if (cs && (!p.consent || p.consent.v !== cs.v)) { p.consent = cs; changed = true; } } // v10.01: yasal metin onayı (sürüm değişince yeniden alınır)
     if (body.ackNotices && p.notices && p.notices.length) { p.notices = []; changed = true; } // v10.01: yönetici uyarıları görüldü
-    if (body.name) { var n = cleanName(body.name); if (n !== p.name) { p.name = n; changed = true; } }
-    if (body.avatar) { p.avatar = cleanCosmetics(p, cleanAvatar(body.avatar)); changed = true;
+    var nameFix = null, nowN = Date.now(); // v10.11 (K178): ad süzgeci + yönetici sıfırlamasından sonra 24 saat ad kilidi
+    if (body.name) { var n = cleanName(body.name); if (n !== p.name) {
+      if (p.nameLockUntil && p.nameLockUntil > nowN) nameFix = { name: p.name, why: 'Adın yönetici tarafından değiştirildi (topluluk kuralları); ' + hhmm(p.nameLockUntil) + ' saatine kadar yeniden değiştirilemez.' };
+      else if (Mod.badName(n)) nameFix = { name: p.name, why: 'Bu ad kullanılamaz (topluluk kuralları). Adın "' + p.name + '" olarak kaldı.' };
+      else { p.name = n; changed = true; } } }
+    if (p.nameFixNew) { nameFix = { name: p.name, why: '' }; delete p.nameFixNew; changed = true; } // yönetici sıfırlaması: istemci adı sessizce alır (gerekçe bildirimi notices ile)
+    if (body.avatar) { p.avatar = cleanCosmetics(p, cleanAvatar(body.avatar)); changed = true; if (p.avatar) p.avatar.name = p.name;
       if (p.avatar && p.avatar.intro) { // Masa Giriş Skini: yalnızca sahip olunan kuşanılabilir (deneme hakkı koltuğa oturulurken ayrıca değerlendirilir)
         var okIntro = ownsIntro(p, p.avatar.intro); // v9.88: karakter sahipliğiyle açılan skin de kuşanılabilir
         if (!okIntro) delete p.avatar.intro;
       }
     }
-    var tv = takeView(p);
+    var tv = takeView(p); if (nameFix) tv.view.nameFix = nameFix;
     fin(null, tv.view, changed || tv.dirty);
   });
 }

@@ -8,7 +8,7 @@ var Accounts = require('./accounts.js');
 
 var VERSION = 'sosyal-1';
 var MSG_MAX = 500, NOTE_MAX = 300, PAGE = 30, PAGE_MAX = 60, OUT_MAX = 30, LIST_MAX = 200;
-var REASONS = { hakaret: 'Hakaret / taciz', spam: 'Spam / reklam', hile: 'Hile şüphesi', diger: 'Diğer' };
+var REASONS = { hakaret: 'Hakaret / taciz', ad: 'Uygunsuz ad (oyuncu / kıraathane)', spam: 'Spam / reklam', hile: 'Hile şüphesi', diger: 'Diğer' }; // v10.11 (K178): 'ad'
 var DB = null, DATA = path.join(__dirname, 'data'), S = { rels: {}, blocks: {}, dm: { seq: 0, msgs: [] } }, saveTimer = null;
 var online = {}; // hesap kimliği → ws listesi (sosyal soket; çoklu cihaz)
 
@@ -302,7 +302,9 @@ function opReport(me, body, cb) { // şikâyet kaydı: sebep + not + son 20 mesa
       addReport(rec, function (e3, id) { if (e3) return cb(e3); console.log('şikâyet kaydı #' + id + ': ' + me.name + ' → ' + p.name + ' (' + reason + ')'); cb(null, { ok: true, id: id, reasonText: REASONS[reason] }); }); }); });
 }
 function cleanText(s, max) { return String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\r\n?/g, '\n').trim().slice(0, max); }
+function muteText(t) { var d = new Date(t + 3 * 3600000); return ('0' + d.getUTCDate()).slice(-2) + '.' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + ' ' + ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2); }
 function opSend(me, body, cb) {
+  if (me.muteUntil && me.muteUntil > now()) { var em = new Error('Mesaj göndermen ' + muteText(me.muteUntil) + ' saatine kadar kapalı (topluluk kuralları).'); em.code = 'muted'; return cb(em); } // v10.11 (K178): yönetici 24 saat mesaj yasağı
   var to = body && typeof body.to === 'string' ? body.to.trim() : ''; if (!validId(to) || to === me.id) return cb(new Error('Geçersiz alıcı.'));
   var text = cleanText(body.body, MSG_MAX + 1); if (!text) return cb(new Error('Boş mesaj gönderilemez.')); if (text.length > MSG_MAX) return cb(new Error('Mesaj en çok ' + MSG_MAX + ' karakter.'));
   var cid = typeof body.cid === 'string' && /^[A-Za-z0-9_-]{4,40}$/.test(body.cid) ? body.cid : crypto.randomBytes(8).toString('hex');
@@ -334,7 +336,7 @@ function opRead(me, body, cb) { // sohbet açılınca gelenler okundu; karşı t
 }
 
 // ---------- HTTP ----------
-var OPS = { '/api/social/me': opMe, '/api/social/state': opState, '/api/social/request': opRequest, '/api/social/accept': opAccept, '/api/social/reject': opReject, '/api/social/cancel': opCancel, '/api/social/unfriend': opUnfriend, '/api/social/block': opBlock, '/api/social/unblock': opUnblock, '/api/social/report': opReport, '/api/dm/send': opSend, '/api/dm/history': opHistory, '/api/dm/read': opRead, '/api/social/export': opExport, '/api/social/delete': opDelete }; // v10.01: veri indirme + hesap silme
+var OPS = { '/api/social/recent': opRecent, '/api/social/invite': opInvite, /* v10.10 (K177) */ '/api/social/me': opMe, '/api/social/state': opState, '/api/social/request': opRequest, '/api/social/accept': opAccept, '/api/social/reject': opReject, '/api/social/cancel': opCancel, '/api/social/unfriend': opUnfriend, '/api/social/block': opBlock, '/api/social/unblock': opUnblock, '/api/social/report': opReport, '/api/dm/send': opSend, '/api/dm/history': opHistory, '/api/dm/read': opRead, '/api/social/export': opExport, '/api/social/delete': opDelete }; // v10.01: veri indirme + hesap silme
 function handleHttp(url, body, cb) {
   var fn = OPS[url]; if (!fn) return cb(new Error('yok'));
   if (!body || !validId(body.id)) return cb(new Error('Hesap bulunamadı; yeniden giriş gerekli.'));
@@ -342,6 +344,44 @@ function handleHttp(url, body, cb) {
     try { fn(p, body, function (e2, out) { if (e2) cb(e2); else cb(null, out); }); } catch (ex) { cb(ex); } });
 }
 function onlineCount() { return Object.keys(online).length; }
+// ---- v10.10 (K177): son masa arkadaşları (bellekte, 6 saat) ve masa daveti ----
+var recent = {}, RECENT_MS = 6 * 3600 * 1000, roomLookup = null, invRate = {};
+function setRoomLookup(fn) { roomLookup = fn; }
+function noteCoPlayers(id, list) { // maç başında: bu oyuncunun masasındaki diğerleri (gerçek oyuncu ya da gizli bot hesabı)
+  if (!id || !list || !list.length) return; var now = Date.now(), cur = (recent[id] || []).filter(function (x) { return now - x.at < RECENT_MS && !list.some(function (y) { return y.id === x.id; }); });
+  recent[id] = list.map(function (y) { return { id: y.id, at: now, bot: !!y.bot, until: y.until || 0 }; }).concat(cur).slice(0, 12);
+}
+function recentList(id) { var now = Date.now(); return (recent[id] || []).filter(function (x) { return now - x.at < RECENT_MS; }); }
+function recentIds(id) { return recentList(id).map(function (x) { return x.id; }); }
+// gizli bot (K171): maç boyunca ve maçtan sonra bir süre (sunucunun verdiği 'until') çevrim içi görünür; daveti gider ama yanıtsız kalır (gerçek oyuncu da daveti görmezden gelebilir)
+function seenOnline(viewer, id) { var e = recentList(viewer).filter(function (x) { return x.id === id; })[0]; if (e && e.bot) return Date.now() < e.until; return isOnline(id); }
+function isRecentBot(viewer, id) { var e = recentList(viewer).filter(function (x) { return x.id === id; })[0]; return !!(e && e.bot); }
+function opRecent(me, body, cb) {
+  var ids = recentIds(me.id); if (!ids.length) return cb(null, { players: [] });
+  listBlocks(me.id, function (e0, blocked) { if (e0) return cb(e0);
+    briefs(ids, function (e, B) { if (e) return cb(e); cb(null, { players: ids.filter(function (x) { return B[x] && (blocked || []).indexOf(x) < 0; }).map(function (x) { return Object.assign({}, B[x], { online: seenOnline(me.id, x) }); }) }); }); });
+}
+function opInvite(me, body, cb) { // davet: hedef arkadaş ya da son 6 saatte aynı masada oynadığın biri; oda kurulmuş, başlamamış, Hızlı Katıl değil, sen oturuyorsun, boş koltuk var
+  var code = String((body && body.code) || '').toUpperCase().slice(0, 8), now = Date.now();
+  var rl = invRate[me.id] = (invRate[me.id] || []).filter(function (t) { return now - t < 10 * 60 * 1000; }); if (rl.length >= 20) return cb(new Error('Çok fazla davet gönderdin; biraz bekle.'));
+  var room = roomLookup ? roomLookup(code) : null;
+  if (!room) return cb(new Error('Oda bulunamadı.'));
+  if (room.quick) return cb(new Error('Hızlı Katıl masasına davet gönderilmez; arkadaş odası kur.'));
+  if (room.started) return cb(new Error('Bu masada oyun başlamış.'));
+  if (room.seats.indexOf(me.id) < 0) return cb(new Error('Yalnız oturduğun odaya davet gönderebilirsin.'));
+  if (!room.free) return cb(new Error('Masa dolu.'));
+  targetOf(body, me, function (e, p) { if (e) return cb(e);
+    if (room.seats.indexOf(p.id) >= 0) return cb(null, { ok: true, online: true, already: true });
+    blocksBetween(me.id, p.id, function (e2, bl) { if (e2) return cb(e2); if (bl.xy || bl.yx) return cb(new Error('Bu kişiye davet gönderilemiyor.'));
+      getRel(me.id, p.id, function (e3, rel) { if (e3) return cb(e3);
+        var friends = rel && rel.state === 'friends', rec = recentIds(me.id).indexOf(p.id) >= 0;
+        if (!friends && !rec) return cb(new Error('Yalnız arkadaşlarını ya da son masa arkadaşlarını davet edebilirsin.'));
+        rl.push(now); if (isRecentBot(me.id, p.id)) return cb(null, { ok: true, online: seenOnline(me.id, p.id) }); // gizli bot: davet "gitti" görünür, gelmez
+        var on = isOnline(p.id);
+        if (on) push(p.id, { ev: 'invite', from: brief(me), code: code, hands: room.totalHands || null, theme: room.theme || null, kind: room.venue ? 'venue' : 'room' });
+        cb(null, { ok: true, online: on });
+      }); }); });
+}
 function stats(cb) { reportCount(function (n) { cb({ online: Object.keys(online).length, reports: n }); }); }
 
-module.exports = { friendsBetween: friendsBetween, /* v10.06 (K151) */ push: push, /* v10.07 (K164): yönetim hediyesi bildirimi */ VERSION: VERSION, deleteAccount: deleteAccount, retention: retention, exportAccount: exportAccount, /* v10.01 */ onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };
+module.exports = { blockedIds: listBlocks, /* v10.11 (K178): keşfet */ setRoomLookup: setRoomLookup, noteCoPlayers: noteCoPlayers, /* v10.10 (K177) */ friendsBetween: friendsBetween, /* v10.06 (K151) */ push: push, /* v10.07 (K164): yönetim hediyesi bildirimi */ VERSION: VERSION, deleteAccount: deleteAccount, retention: retention, exportAccount: exportAccount, /* v10.01 */ onlineCount: onlineCount, REASONS: REASONS, listReports: listReports, closeReport: closeReport, init: init, handleHttp: handleHttp, hello: hello, detach: detach, isOnline: isOnline, summary: summary, stats: stats, pairKey: pairKey, _store: { history: history, unreadBy: unreadBy } };

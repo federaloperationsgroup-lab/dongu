@@ -8,6 +8,7 @@ var Okey = require('./engine.js');
 var Accounts = require('./accounts.js');
 var Economy = require('./economy.js');
 var Bots = require('./bots.js'); // v10.09 (K171): gizli botlar (Hızlı Katıl)
+var Mod = require('./moderation.js'); // v10.11 (K178): ad süzgeci
 
 var PORT = process.env.PORT || 8080;
 var BOT_DELAY = parseInt(process.env.BOT_DELAY) || 900;        // bot hamle gecikmesi (ms)
@@ -150,7 +151,7 @@ var ADMIN_CATS = { character: 'Karakter', intro: 'Masa Girişi', action: 'Aksiyo
 function adminPlayerOp(form, cb) {
   var id = String(form.id || ''), islem = String(form.islem || ''), not = String(form.not || '').trim().slice(0, 120), bildir = form.bildir === '1';
   if (!/^[A-Za-z0-9_-]{3,40}$/.test(id)) return cb('Geçersiz oyuncu kimliği.', false);
-  var gift = '';
+  var gift = '', modMsg = '';
   Accounts.adminEdit(id, function (p) {
     var text;
     if (islem === 'altin') {
@@ -164,13 +165,25 @@ function adminPlayerOp(form, cb) {
       if (it.cat === 'uses') { p.skinUses = p.skinUses || {}; p.skinUses[it.skin] = (p.skinUses[it.skin] || 0) + (it.uses || 0); text = it.name + ' → elinde ' + p.skinUses[it.skin] + ' kullanım'; }
       else { p.owned = p.owned || []; if (p.owned.indexOf(it.id) >= 0) throw new Error('Oyuncuda zaten var: ' + it.name + '.'); p.owned.push(it.id); text = it.name; }
       gift = it.name;
+    } else if (islem === 'ad_sifirla') { // v10.11 (K178): moderasyon — ad "Oyuncu 1234", 24 saat değiştirilemez; masadaki koltukta da hemen değişir
+      var oldN = p.name; p.name = 'Oyuncu ' + (1000 + Math.floor(Math.random() * 9000)); if (p.avatar) p.avatar.name = p.name; p.nameLockUntil = Date.now() + 24 * 3600000; p.nameFixNew = true;
+      p.notices = (p.notices || []).slice(-9).concat([{ at: Date.now(), text: 'Adın topluluk kurallarına uymadığı için "' + p.name + '" olarak değiştirildi; 24 saat yeniden değiştirilemez.' + (not ? ' Not: ' + not : '') }]);
+      Venues.adminOp(p.id, 'sahip_ad', p.name); renameInRooms(p.id, p.name); text = 'ad sıfırlandı ("' + oldN + '" → "' + p.name + '", 24 saat kilit)'; modMsg = 'Adın topluluk kurallarına uymadığı için değiştirildi.';
+    } else if (islem === 'mesaj_yasak') {
+      p.muteUntil = Date.now() + 24 * 3600000; text = 'özel mesaj yasağı 24 saat'; modMsg = 'Özel mesaj gönderme 24 saat kapatıldı (topluluk kuralları).';
+      p.notices = (p.notices || []).slice(-9).concat([{ at: Date.now(), text: 'Özel mesaj gönderme 24 saat kapatıldı (topluluk kuralları).' + (not ? ' Not: ' + not : '') }]);
+    } else if (islem === 'mesaj_ac') {
+      if (!(p.muteUntil > Date.now())) throw new Error('Oyuncunun mesaj yasağı yok.'); p.muteUntil = 0; text = 'mesaj yasağı kaldırıldı'; modMsg = 'Özel mesaj yasağın kaldırıldı.';
+    } else if (islem === 'mekan_ad' || islem === 'kesif_gizle' || islem === 'kesif_goster') {
+      var vo = Venues.adminOp(p.id, islem); if (!vo) throw new Error('Oyuncunun kıraathanesi yok.'); text = vo.text;
+      if (islem === 'mekan_ad') { modMsg = 'Kıraathanenin adı topluluk kurallarına uymadığı için değiştirildi.'; p.notices = (p.notices || []).slice(-9).concat([{ at: Date.now(), text: 'Kıraathanenin adı topluluk kurallarına uymadığı için "' + vo.name + '" olarak değiştirildi; 24 saat yeniden değiştirilemez.' + (not ? ' Not: ' + not : '') }]); }
     } else throw new Error('Bilinmeyen işlem.');
     p.adminLog = (p.adminLog || []).concat([{ at: Date.now(), islem: islem, text: text, not: not }]).slice(-30);
     return { text: text };
   }, function (e, out, p) {
     if (e) return cb('Olmadı: ' + e.message, false);
     console.log('yönetim: ' + id + ' (' + (p.name || '') + ') ' + out.text + (not ? ' · not: ' + not : ''));
-    if (bildir && Social && Social.push) Social.push(id, { ev: 'acc', text: gift ? '🎁 Hediye: ' + gift + (not ? ' — ' + not : '') : '' });
+    if (bildir && Social && Social.push) Social.push(id, { ev: 'acc', text: modMsg ? '⚠️ ' + modMsg : gift ? '🎁 Hediye: ' + gift + (not ? ' — ' + not : '') : '' });
     cb('Yapıldı: ' + (p.name || id) + ' · ' + out.text + (bildir ? ' (oyuncuya bildirildi)' : ''), true);
   });
 }
@@ -185,11 +198,14 @@ function adminPlayersPage(res, qs, esc) {
     var rows = list.map(function (p) {
       var lv = Accounts.levelOf(p.xp || 0).level, owned = p.owned || [], chars = owned.filter(function (o) { return /^c_/.test(o); }).map(nameOf), skins = owned.filter(function (o) { return /^(i_|a_)/.test(o); }).map(nameOf);
       var log = (p.adminLog || []).slice(-3).reverse().map(function (l) { return '<li><small>' + esc(new Date(l.at).toLocaleString('tr-TR')) + '</small> ' + esc(l.text) + (l.not ? ' · <i>' + esc(l.not) + '</i>' : '') + '</li>'; }).join('');
-      return '<div class="pl"><div class="hd"><b>' + esc(p.name || '(adsız)') + '</b> <small>' + esc(p.id) + '</small><span class="tags">' + (p.bot ? '<em style="background:#fde8c8">🤖 gizli bot</em>' : '') + '<em>Seviye ' + lv + '</em><em>' + (p.coins || 0).toLocaleString('tr-TR') + ' altın</em><em>' + (p.xp || 0) + ' XP</em></span></div>' +
+      var vn = Venues.ofOwner(p.id), nowT = Date.now(), tr = function (t) { return esc(new Date(t).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })); };
+      var modTags = (p.muteUntil > nowT ? '<em style="background:#fde8e8">🔇 mesaj yasağı · bitiş ' + tr(p.muteUntil) + '</em>' : '') + (p.nameLockUntil > nowT ? '<em style="background:#fde8e8">🔒 ad kilidi · bitiş ' + tr(p.nameLockUntil) + '</em>' : '') + (vn ? '<em>🏠 ' + esc(vn.name) + (vn.hiddenDiscover ? ' · keşfette gizli' : '') + '</em>' : '');
+      return '<div class="pl"><div class="hd"><b>' + esc(p.name || '(adsız)') + '</b> <small>' + esc(p.id) + '</small><span class="tags">' + modTags + (p.bot ? '<em style="background:#fde8c8">🤖 gizli bot</em>' : '') + '<em>Seviye ' + lv + '</em><em>' + (p.coins || 0).toLocaleString('tr-TR') + ' altın</em><em>' + (p.xp || 0) + ' XP</em></span></div>' +
         '<div class="own">Karakter: ' + (chars.length ? esc(chars.join(', ')) : '—') + ' · Skin: ' + (skins.length ? esc(skins.join(', ')) : '—') + (p.lastSeen ? ' · son kayıt: ' + esc(new Date(p.lastSeen).toLocaleString('tr-TR')) : '') + '</div>' +
         '<div class="ops"><form method="post" action="' + act + '">' + hidden(p, 'altin') + '<input name="deger" inputmode="numeric" placeholder="altın (+500 / -200)" required>' + common + '<button>Altın uygula</button></form>' +
         '<form method="post" action="' + act + '">' + hidden(p, 'seviye') + '<input name="deger" type="number" min="1" max="' + (Economy.CONFIG.levelCap || 50) + '" placeholder="seviye" required>' + common + '<button>Seviye ayarla</button></form>' +
-        '<form method="post" action="' + act + '">' + hidden(p, 'hediye') + '<select name="deger" required>' + opts + '</select>' + common + '<button>Hediye et</button></form></div>' +
+        '<form method="post" action="' + act + '">' + hidden(p, 'hediye') + '<select name="deger" required>' + opts + '</select>' + common + '<button>Hediye et</button></form>' +
+        '<form method="post" action="' + act + '" class="mod"><input type="hidden" name="id" value="' + esc(p.id) + '"><input type="hidden" name="q" value="' + esc(qs.q || '') + '"><select name="islem" required><option value="ad_sifirla">Adı sıfırla ("Oyuncu 1234", 24 saat kilit)</option><option value="mesaj_yasak">Özel mesaj yasağı (24 saat)</option><option value="mesaj_ac">Mesaj yasağını kaldır</option>' + (vn ? '<option value="mekan_ad">Kıraathane adını sıfırla (24 saat kilit)</option><option value="' + (vn.hiddenDiscover ? 'kesif_goster">Kıraathaneyi keşfette göster' : 'kesif_gizle">Kıraathaneyi keşfette gizle') + '</option>' : '') + '</select>' + common + '<button style="background:#b3261e">Moderasyon uygula</button></form></div>' +
         (log ? '<ul class="log">' + log + '</ul>' : '') + '</div>';
     }).join('');
     var msg = qs.msg ? '<p class="msg ' + (qs.ok === '1' ? 'ok' : 'err') + '">' + esc(qs.msg) + '</p>' : '';
@@ -202,7 +218,7 @@ function adminPlayersPage(res, qs, esc) {
       '.msg{padding:10px 12px;border-radius:10px;font-weight:600}.msg.ok{background:#e3f6e5;color:#1d6b2a}.msg.err{background:#fde8e8;color:#9b1c1c}.nav{font-size:13px;margin-bottom:8px}</style></head><body>' +
       '<div class="nav"><a href="/yonetim/sikayetler?key=' + K + '">Şikâyetler</a> · <a href="/yonetim/satinalmalar?key=' + K + '">Satın almalar</a> · <b>Oyuncular</b></div><h1>Oyuncular</h1>' + msg +
       '<form class="top" method="get" action="/yonetim/oyuncular"><input type="hidden" name="key" value="' + esc(ADMIN_KEY) + '"><input name="q" value="' + esc(qs.q || '') + '" placeholder="oyuncu adı ya da kimliği (boş: son görülen 40)"><button>Ara</button></form>' +
-      (rows || '<p>Oyuncu bulunamadı.</p>') + '<p style="font-size:12px;color:#777">Gizli bot hesapları (' + Bots.count() + ') boş aramada listelenmez; adla aranınca 🤖 işaretiyle görünür. Altın eksiye düşmez. Seviye ayarlamak XP\'yi o seviyenin başına çeker (seviye ödülü verilmez). Hediye kalıcıdır. Açık oturumdaki oyuncu "bildir" seçiliyse hemen görür; değilse bir sonraki girişte.</p></body></html>';
+      (rows || '<p>Oyuncu bulunamadı.</p>') + '<p style="font-size:12px;color:#777">Gizli bot hesapları (' + Bots.count() + ') boş aramada listelenmez; adla aranınca 🤖 işaretiyle görünür. Altın eksiye düşmez. Seviye ayarlamak XP\'yi o seviyenin başına çeker (seviye ödülü verilmez). Hediye kalıcıdır. Açık oturumdaki oyuncu "bildir" seçiliyse hemen görür; değilse bir sonraki girişte. Moderasyon (v10.11): ad / kıraathane adı sıfırlama 24 saat kilitlenir ve oyuncuya gerekçeli bildirim gider; mesaj yasağı yalnız özel mesajı kapatır (oyun ve masa açık).</p></body></html>';
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(html);
   });
 }
@@ -370,6 +386,7 @@ function sanitizeSeat(r, s) { // koltuğun skin bilgisi hesaptan: Masa Giriş Sk
   if (!s.acc) { s.skins = 0; if (s.avatar) delete s.avatar.intro; return; }
   Accounts.auth(s.acc, function (e, p) {
     if (e || !p) { s.skins = 0; s.free = null; if (s.avatar) delete s.avatar.intro; broadcastRoom(r); return; }
+    var accName = String(p.name || '').slice(0, 14); if (accName && s.name !== accName) { s.name = accName; if (s.avatar) s.avatar.name = accName; setTimeout(function () { broadcastRoom(r); }, 0); } // v10.11 (K178): masadaki ad hesaptaki ad (süzgeç / yönetici sıfırlaması istemcinin beyanını geçer)
     s.skins = Accounts.introCount(p); s.actions = Accounts.ownedActions(p); // v9.91 (K116)
     s.intros = INTRO_IDS.filter(function (x) { return Accounts.ownsIntro(p, x); }); // v10.06 (K159): istenildiği an kullanılabilen Masa Giriş Skinleri
     var vn = Venues.ofOwner(p.id); s.prof = { id: p.id, level: Accounts.levelOf(p.xp).level, matches: (p.stats && p.stats.matches) || 0, wins: (p.stats && p.stats.wins) || 0, owned: (p.owned || []).length, venue: vn ? vn.name : null, venueTier: vn ? vn.tier : null, arenas: Economy.CONFIG.arenas.filter(function (a) { return Economy.arenaOpen(p, a.theme); }).length, lp: Economy.leaguePoints(p, Date.now()), badges: (p.badges || []).slice(-3) }; // badges (v10.09, K174): lig rozetleri // v9.74 profil kartı (v9.86: açık mekân sayısı · v9.87: bu sezonun Döngü Puanı)
@@ -540,6 +557,8 @@ function startGame(r) {
   r.g.botWeak = r.seats.map(function (s) { return (s && s.bot && s.weak) ? s.weak : 0; }); // v10.09 (K171): bahisli masadaki gizli botlar zayıf oynar (kullanıcı kararı)
   if (TEST_FAKE_HAND && r.g.totalHands >= 12) r.g.guaranteedFakeIndicatorHand = TEST_FAKE_HAND;
   r.elig = null; r.factors = null; r.rewarded = {}; r.matchStart = Date.now(); r.humansStart = realHumans(r); r.matchLogged = false; r.moment = null; r.hosted = false; r.rematch = null;
+  var botUntil = Date.now() + ((r.settings.totalHands || 6) * 4 + 15 + Math.floor(Math.random() * 30)) * 60000; // gizli botlar maç + 15–45 dk çevrim içi görünür
+  if (Social && Social.noteCoPlayers) try { r.seats.forEach(function (s, i) { if (!s || s.bot || !s.prof || !s.prof.id) return; Social.noteCoPlayers(s.prof.id, r.seats.map(function (x, j) { if (!x || j === i) return null; if (x.hidden) return { id: x.botId, bot: true, until: botUntil }; if (!x.bot && x.prof && x.prof.id) return { id: x.prof.id }; return null; }).filter(Boolean)); }); /* yalnız doğrulanmış hesap (sanitizeSeat → prof) */ } catch (e) { console.log('noteCoPlayers: ' + e.message); } // v10.10 (K177): son masa arkadaşları (davet için)
   r.league = leagueEligible(r); r.leagueDone = false; // v9.87 (K108): lig maçı mı (başlarken karar verilir; maç boyunca değişmez)
   r.actsAll = [0, 0, 0, 0]; r.pooled = false; r.actsTot = null; r.botActsTot = null; r.forfeit = null; r.poolExtra = 0; // yeni maç: katılım ve ödül kayıtları sıfır (v9.76.1: v9.76'da bu satır yorumun içinde kalmıştı → ev sahipliği ödülü hamle sayamıyor, rövanşta ceza/sayaç taşınıyordu)
   r.hostVenue = pickHostVenue(r); // v9.76 görsel ev sahipliği (K-D2: oturma sırasında kıraathanesi olan ilk oyuncu; kıraathane masasında o kıraathane)
@@ -854,7 +873,10 @@ Accounts.init({ publicDir: PUBLIC }, function (e, mode) { setImmediate(function 
   if (Iap) Iap.init({ accounts: Accounts, db: Accounts.db() }, function (e4, imode) { var c = Iap.configured(); console.log('satın alma deposu: ' + (imode || '?') + (e4 ? ' (' + e4.message + ')' : '') + ' · RevenueCat ' + (c.secret ? 'REST açık' : 'REST kapalı') + ', webhook ' + (c.webhook ? 'açık' : 'kapalı')); });
 }); });
 Accounts.route('/api/venue/', Venues.handleHttp);
-if (Social) { Accounts.route('/api/social/', Social.handleHttp); Accounts.route('/api/dm/', Social.handleHttp); } // v9.93
+if (Social) { Accounts.route('/api/social/', Social.handleHttp); Accounts.route('/api/dm/', Social.handleHttp); }
+if (Venues.setLiveCount) Venues.setLiveCount(function (code) { var ids = {}, lv = live[code]; if (lv) Object.keys(lv.conns).forEach(function (cid) { var c = lv.conns[cid]; ids[c.acc ? c.acc.id : cid] = 1; }); Object.keys(rooms).forEach(function (k) { var r = rooms[k]; if (!r.venue || r.venue.code !== code) return; r.seats.forEach(function (s) { if (s && !s.bot && s.ws && s.ws.readyState === 1) ids[s.prof && s.prof.id ? s.prof.id : (s.acc ? s.acc.id : k + s.name)] = 1; }); }); return Object.keys(ids).length; }); // v10.11 (K178): keşfette "şu an N kişi"
+function renameInRooms(id, name) { Object.keys(rooms).forEach(function (k) { var r = rooms[k], hit = false; r.seats.forEach(function (s) { if (s && !s.bot && s.prof && s.prof.id === id) { s.name = name; if (s.avatar) s.avatar.name = name; hit = true; } }); if (hit) broadcastRoom(r); }); } // v10.11 (K178): yönetici ad sıfırlaması süren odada da görünür
+if (Social && Social.setRoomLookup) Social.setRoomLookup(function (code) { var r = rooms[code]; if (!r) return null; return { code: r.code, started: !!r.g, quick: !!r.quick, venue: !!r.venue, totalHands: r.settings.totalHands, theme: r.settings.theme, free: freeSeat(r) >= 0, seats: r.seats.map(function (x) { return x ? (x.hidden ? x.botId : (x.acc ? x.acc.id : '')) : ''; }) }; }); // v10.10 (K177): davet doğrulaması // v9.93
 if (Iap) Accounts.route('/api/iap/', function (url, body, done) { // v10.03 (K140): ürün listesi (herkese), eşitleme (hesapla); webhook ayrı (üstte, başlık gerekir)
   if (url === '/api/iap/products') return done(null, { products: Iap.products(), store: Iap.configured() });
   if (url === '/api/iap/sync') return Accounts.auth(body, function (e, p) { if (e || !p) return done(e || new Error('Hesap bulunamadı; yeniden giriş gerekli.')); Iap.sync(p.id, function (e2, r) { if (e2) return done(e2); Accounts.get(p.id, function (e3, p2) { done(null, { credited: r.credited, off: !!r.off, player: p2 ? Accounts.publicView(p2) : null }); }); }); });
@@ -885,7 +907,7 @@ var server = http.createServer(function (req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
     res.end(JSON.stringify([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: ANDROID_SHA256 } }], null, 1)); return;
   }
-  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.09. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + '. Süreler: hazırlık ' + Math.round(PREP_FIRST_MS / 1000) + '/' + Math.round(PREP_MS / 1000) + ' sn, hamle ' + Math.round(TURN_MS / 1000) + ' sn (ilk hamle +' + Math.round(FIRST_TURN_EXTRA_MS / 1000) + ')' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
+  if (url === '/durum') { Accounts.count(function (n) { Accounts.matchCounts(function (mc) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v10.10. Ekonomi: ' + Economy.CONFIG.version + '. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + ' (kayıttan dönen ' + restoredN + ')' + '. Sosyal: ' + (Social ? Social.VERSION + ' (çevrim içi ' + Social.onlineCount() + ')' : 'kapalı') + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n + '. Kayıt: ' + mc.hands + ' el / ' + mc.matches + ' maç' + '. Süreler: hazırlık ' + Math.round(PREP_FIRST_MS / 1000) + '/' + Math.round(PREP_MS / 1000) + ' sn, hamle ' + Math.round(TURN_MS / 1000) + ' sn (ilk hamle +' + Math.round(FIRST_TURN_EXTRA_MS / 1000) + ')' + (Accounts.lastWipe() ? '. Sıfırlama: ' + Accounts.lastWipe() + ' (yapıldı)' : '') + (PKG_STATUS ? '. ' + PKG_STATUS : '')); }); }); return; }
   if (url === '/yonetim/sikayetler' || url === '/yonetim/sikayet-kapat' || url === '/yonetim/hesap-sil' || url === '/yonetim/satinalmalar' || url === '/yonetim/oyuncular' || url === '/yonetim/oyuncu-islem') { // v10.00 (K133): basit, anahtarlı şikâyet inceleme sayfası (yalnız ADMIN_KEY tanımlıysa); v10.01: kapatırken uyarı, kimlikle hesap silme (e-posta talepleri)
     var qs = {}; (req.url.split('?')[1] || '').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) qs[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); });
     if (!ADMIN_KEY || !qs.key || qs.key !== ADMIN_KEY || !Social) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('bulunamadı'); return; }
@@ -1057,7 +1079,7 @@ function handle(ws, me, m) {
     var vv = Venues.ofCode(m.code); if (!vv) throw new Error('Kıraathane bulunamadı.');
     venueLeave(me); me.venue = vv.code; me.cid = me.cid || ('c' + (cidSeq++));
     var lv = live[vv.code] || (live[vv.code] = { conns: {} });
-    var G = Economy.VENUE_GRID; lv.conns[me.cid] = { ws: ws, acc: accOf(m), name: (m.name || 'Oyuncu').slice(0, 14), avatar: Accounts.cleanAvatar(m.avatar) || null, gx: G.doorCols[0], gy: G.rows - 1, at: 0 };
+    var G = Economy.VENUE_GRID, vName = (m.name || 'Oyuncu').slice(0, 14); if (Mod.badName(vName)) vName = 'Oyuncu'; /* v10.11 (K178) */ lv.conns[me.cid] = { ws: ws, acc: accOf(m), name: vName, avatar: Accounts.cleanAvatar(m.avatar) || null, gx: G.doorCols[0], gy: G.rows - 1, at: 0 };
     send(ws, { t: 'vstate', code: vv.code, you: me.cid, players: venuePlayers(vv.code), tables: venueTables(vv.code) });
     venueBroadcast(vv.code, { t: 'vjoin', player: venuePlayers(vv.code).filter(function (x) { return x.cid === me.cid; })[0] }, me.cid);
     // kıraathanedeki görünüm de hesaptaki sahipliğe göre (ücretli kozmetik beyana göre giyilemez)
