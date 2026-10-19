@@ -31,6 +31,8 @@ jobs:
       - name: Eşitle
         working-directory: mobile
         run: npx cap sync android
+      - name: Sabit test imzası (v10.08; her APK aynı anahtarla imzalanır → yeni sürüm eskisinin üstüne kurulur, oyun hesabı kalır)
+        run: mkdir -p ~/.android && cp mobile/debug-test.keystore ~/.android/debug.keystore
       - name: Derle (debug APK + release AAB, imzasız)
         working-directory: mobile/android
         run: chmod +x gradlew && ./gradlew --no-daemon assembleDebug bundleRelease
@@ -38,8 +40,9 @@ jobs:
         run: |
           mkdir -p out
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk out/dongu-debug-$(cat mobile/version.txt).apk
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk out/dongu.apk   # sabit ad: .../releases/download/android-latest/dongu.apk hep son sürüm
           cp mobile/android/app/build/outputs/bundle/release/app-release.aab out/dongu-release-unsigned-$(cat mobile/version.txt).aab
-          { echo "sürüm $(cat mobile/version.txt) kod $(cat mobile/versioncode.txt) commit ${{ github.sha }} derleme #${{ github.run_number }}"; echo "--- AndroidManifest (MainActivity) ---"; tr '\n' ' ' < mobile/android/app/src/main/AndroidManifest.xml | grep -o '<activity[^>]*MainActivity[^>]*' | tr ' ' '\n' | grep -E 'screenOrientation|android:name|configChanges|launchMode' ; echo "--- build.gradle ---"; grep -E 'versionCode|versionName|applicationId' mobile/android/app/build.gradle; echo "--- styles.xml ---"; grep -E 'windowFullscreen|NoActionBarLaunch' mobile/android/app/src/main/res/values/styles.xml; echo "--- izinler ---"; grep -o 'uses-permission[^/]*' mobile/android/app/src/main/AndroidManifest.xml; echo "--- www ---"; find mobile/www -type f | wc -l; grep -o "VERSION = '[0-9.]*'" mobile/www/index.html | head -1; grep -c "window.DONGU_CONFIG" mobile/www/index.html; } > out/build-info.txt 2>&1 || true
+          { echo "sürüm $(cat mobile/version.txt) kod $(cat mobile/versioncode.txt) commit ${{ github.sha }} derleme #${{ github.run_number }}"; echo "--- AndroidManifest (MainActivity) ---"; tr '\n' ' ' < mobile/android/app/src/main/AndroidManifest.xml | grep -o '<activity[^>]*MainActivity[^>]*' | tr ' ' '\n' | grep -E 'screenOrientation|android:name|configChanges|launchMode' ; echo "--- build.gradle ---"; grep -E 'versionCode|versionName|applicationId' mobile/android/app/build.gradle; echo "--- styles.xml ---"; grep -E 'windowFullscreen|NoActionBarLaunch' mobile/android/app/src/main/res/values/styles.xml; echo "--- izinler ---"; grep -o 'uses-permission[^/]*' mobile/android/app/src/main/AndroidManifest.xml; echo "--- www ---"; find mobile/www -type f | wc -l; grep -o "VERSION = '[0-9.]*'" mobile/www/index.html | head -1; grep -c "window.DONGU_CONFIG" mobile/www/index.html; echo "--- APK imzası ---"; "$(ls -d $ANDROID_HOME/build-tools/* | tail -1)/apksigner" verify --print-certs out/dongu.apk | grep -i 'SHA-256'; } > out/build-info.txt 2>&1 || true
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
@@ -52,6 +55,6 @@ jobs:
           V=$(cat mobile/version.txt)
           gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --prerelease --title "Android derlemesi (son)" --notes "GitHub Actions'ın her yüklemede ürettiği Android paketleri. APK: telefona doğrudan kurulur (bilinmeyen kaynaklara izin). AAB: Play Console için (imzalanır)."
           # eski sürümlerin dosyalarını temizle (sürüm sayfasında yalnız son derleme kalsın)
-          for a in $(gh release view android-latest --json assets --jq '.assets[].name'); do case "$a" in *"-$V."*|build-info.txt) ;; *) gh release delete-asset android-latest "$a" -y || true;; esac; done
+          for a in $(gh release view android-latest --json assets --jq '.assets[].name'); do case "$a" in *"-$V."*|build-info.txt|dongu.apk) ;; *) gh release delete-asset android-latest "$a" -y || true;; esac; done
           gh release upload android-latest out/* --clobber
           gh release edit android-latest --notes "Sürüm $V · derleme #${{ github.run_number }} · $(date -u +%Y-%m-%dT%H:%MZ) · commit ${{ github.sha }}. APK telefona doğrudan kurulur; AAB Play Console için (imzalanır)."

@@ -10,6 +10,7 @@ sunucu olarak `https://dongu.app` kullanılır (app.js `NATIVE` dalı: `SERVER_O
 
 ## Derleme (GitHub Actions)
 - `.github/workflows/android.yml`: debug APK (telefona doğrudan kurulur) + imzasız release AAB (Play için jarsigner ile imzalanır).
+- `debug-test.keystore` (v10.08): **yalnız test APK'sının** sabit imzası (standart debug anahtarı, şifre `android`; mağaza/yükleme anahtarı DEĞİL). Her derleme aynı anahtarla imzalanır → yeni APK eskisinin üstüne kurulur, oyun hesabı silinmez. Sabit indirme adresi: `https://github.com/federaloperationsgroup-lab/dongu/releases/download/android-latest/dongu.apk`.
 - `.github/workflows/ios.yml`: simülatör derlemesi (imzasız, proje doğrulaması). Mağaza için Apple geliştirici hesabı + imza sırları eklenince `xcodebuild archive` adımı açılır.
 
 ## Elle (Mac/PC'de)
