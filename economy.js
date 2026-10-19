@@ -5,6 +5,8 @@
   else root.Economy = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
+  // v10.11: dil katmanı — istemcide window.__L (i18n.js), sunucuda Türkçe şablon doldurma (çıktı eskisiyle aynı)
+  var __L = (typeof window !== 'undefined' && window.__L) || function (t, a) { if (t.indexOf('{') < 0 && t.indexOf('}') < 0) return t; return t.replace(/\{\{|\}\}|\{(\d+)\}/g, function (m, i) { if (m === '{{') return '{'; if (m === '}}') return '}'; var k = +i; return a && k < a.length ? String(a[k]) : m; }); };
 
   var CONFIG = {
     version: 'dongu-economy-2.0',           // 2.0 (v10.09, K171–K173): gizli botlu Hızlı Katıl tam ödül + her Sosyal maç lig maçı, ligde Bak serbest, günlük lig sınırı 20, 1 El/12 El lig çarpanı, antrenman XP 15;           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
@@ -24,14 +26,14 @@
     dailyQuests: [[2, 30, 30], [4, 40, 40], [6, 60, 50]],      // [uygun insan eli, altın, XP] — birikimli
     weeklyQuests: [[24, 200, 150], [48, 300, 200]],
     stakes: [                                // giriş altınlı masalar (el başına; maç = el sayısı × giriş)
-      { id: 'sosyal', name: 'Sosyal', entry: 0, level: 1 },
-      { id: 'bronz', name: 'Bronz', entry: 100, level: 5 },
-      { id: 'gumus', name: 'Gümüş', entry: 300, level: 10 },
-      { id: 'altin', name: 'Altın', entry: 1000, level: 20 },
-      { id: 'platin', name: 'Platin', entry: 5000, level: 25 },
-      { id: 'elmas', name: 'Elmas', entry: 25000, level: 30 },
-      { id: 'usta', name: 'Usta', entry: 100000, level: 35, locked: true },
-      { id: 'efsane', name: 'Efsane', entry: 500000, level: 40, locked: true }
+      { id: 'sosyal', name: __L("Sosyal"), entry: 0, level: 1 },
+      { id: 'bronz', name: __L("Bronz"), entry: 100, level: 5 },
+      { id: 'gumus', name: __L("Gümüş"), entry: 300, level: 10 },
+      { id: 'altin', name: __L("Altın"), entry: 1000, level: 20 },
+      { id: 'platin', name: __L("Platin"), entry: 5000, level: 25 },
+      { id: 'elmas', name: __L("Elmas"), entry: 25000, level: 30 },
+      { id: 'usta', name: __L("Usta"), entry: 100000, level: 35, locked: true },
+      { id: 'efsane', name: __L("Efsane"), entry: 500000, level: 40, locked: true }
     ],
     // v9.86 (K107, D6): mekânlar seviye + oynama hedefiyle açılır; açılan mekân hesapta kalır (eşik sonradan yükselse de kapanmaz).
     // hands: toplam oynanan el (bot masası dahil) · real: gerçek oyuncularla uygun el (masada en az 2 uygun insan; günlük görevlerdeki "uygun el" ile aynı)
@@ -76,18 +78,18 @@
     bakMaxCharges: 5,
     // v9.91 (K116): aksiyon skinleri — maç içi gösteri (bilgi vermez, derecelide serbest). Palyaço'nun allSkins'i yalnız Masa Giriş Skinlerini kapsar (K110: sonradan eklenenler dahil değil).
     actionSkins: [
-      { id: 'cay_servisi', name: 'Çay Servisi', price: 1500, cat: 'prep', perHand: 1 },
-      { id: 'muhur', name: 'Mühür', price: 1500, cat: 'open', perHand: 1 },
-      { id: 'tos', name: 'Tos', price: 1500, cat: 'react', perHand: 2, windowMs: 5000 },
-      { id: 'patili', name: 'Patili Dokunuş', price: 1500, cat: 'discard', perHand: 3 }, // v9.92 (K117): taş atınca pati izi (kendiliğinden)
-      { id: 'nazar', name: 'Nazar Boncuğu', price: 1500, cat: 'guard', perHand: 1, blurMs: 2000 }, // v9.92: sana bakanın görüşü 2 sn bulanık (pasif)
-      { id: 'yoklama', name: 'Yoklama', price: 1200, cat: 'info', perHand: 1, showMs: 4000, rankedOff: true }, // v9.92: rakibin renk dağılımı (bilgi; ligde kapalı)
-      { id: 'zafer', name: 'Zafer Turu', price: 2000, cat: 'end', perHand: 1 } // v9.92: maç birincisine konfeti (kendiliğinden)
+      { id: 'cay_servisi', name: __L("Çay Servisi"), price: 1500, cat: 'prep', perHand: 1 },
+      { id: 'muhur', name: __L("Mühür"), price: 1500, cat: 'open', perHand: 1 },
+      { id: 'tos', name: __L("Tos"), price: 1500, cat: 'react', perHand: 2, windowMs: 5000 },
+      { id: 'patili', name: __L("Patili Dokunuş"), price: 1500, cat: 'discard', perHand: 3 }, // v9.92 (K117): taş atınca pati izi (kendiliğinden)
+      { id: 'nazar', name: __L("Nazar Boncuğu"), price: 1500, cat: 'guard', perHand: 1, blurMs: 2000 }, // v9.92: sana bakanın görüşü 2 sn bulanık (pasif)
+      { id: 'yoklama', name: __L("Yoklama"), price: 1200, cat: 'info', perHand: 1, showMs: 4000, rankedOff: true }, // v9.92: rakibin renk dağılımı (bilgi; ligde kapalı)
+      { id: 'zafer', name: __L("Zafer Turu"), price: 2000, cat: 'end', perHand: 1 } // v9.92: maç birincisine konfeti (kendiliğinden)
     ],                        // Çaktırmadan Bak: el başına en çok hak (K5)
     // Çaktırmadan Bak kullanım paketleri (tüketilebilir; hesapta skinUses.bak). Sıra: el hakkı (skin/karakter) → ücretsiz deneme → satın alınmış kullanım.
     skinUses: [
-      { id: 'u_bak3', skin: 'bak', uses: 3, price: 180, name: 'Çaktırmadan Bak · 3 kullanım' },
-      { id: 'u_bak10', skin: 'bak', uses: 10, price: 500, name: 'Çaktırmadan Bak · 10 kullanım' }
+      { id: 'u_bak3', skin: 'bak', uses: 3, price: 180, name: __L("Çaktırmadan Bak · 3 kullanım") },
+      { id: 'u_bak10', skin: 'bak', uses: 10, price: 500, name: __L("Çaktırmadan Bak · 10 kullanım") }
     ],
     // v9.87 (K108) lig — basit sürüm (K95): ayrı kuyruk yok; en az 3 gerçek oyunculu Hızlı Katıl (Sosyal, girişsiz) maçı "lig maçı"dır.
     // Maç sonu sıraya göre Döngü Puanı (1.–4.; hükmen/ayrılan 4.) × el sayısı katsayısı × rakip gücü; puan 0'ın altına düşmez; aylık sezon (UTC ayı).
@@ -106,12 +108,12 @@
     stakePayoutBps: [6500, 3500, 0, 0],     // kalan havuz: 1. %65, 2. %35
     venue: {
       tiers: [
-        { tier: 1, name: 'Mahalle kahvesi', price: 0, reputation: 0, tables: 2, slots: 0 },
-        { tier: 2, name: 'Semt kıraathanesi', price: 4000, reputation: 100, tables: 3, slots: 0 },
-        { tier: 3, name: 'Geniş kıraathane', price: 12000, reputation: 350, tables: 4, slots: 1 },
-        { tier: 4, name: 'Modern kafe', price: 35000, reputation: 900, tables: 6, slots: 1 },
-        { tier: 5, name: 'Premium kulüp', price: 90000, reputation: 2000, tables: 8, slots: 2 },
-        { tier: 6, name: 'Büyük sosyal tesis', price: 220000, reputation: 4500, tables: 12, slots: 3 }
+        { tier: 1, name: __L("Mahalle kahvesi"), price: 0, reputation: 0, tables: 2, slots: 0 },
+        { tier: 2, name: __L("Semt kıraathanesi"), price: 4000, reputation: 100, tables: 3, slots: 0 },
+        { tier: 3, name: __L("Geniş kıraathane"), price: 12000, reputation: 350, tables: 4, slots: 1 },
+        { tier: 4, name: __L("Modern kafe"), price: 35000, reputation: 900, tables: 6, slots: 1 },
+        { tier: 5, name: __L("Premium kulüp"), price: 90000, reputation: 2000, tables: 8, slots: 2 },
+        { tier: 6, name: __L("Büyük sosyal tesis"), price: 220000, reputation: 4500, tables: 12, slots: 3 }
       ],
       hostGold: { 1: 20, 6: 80, 12: 140 },  // uygun maç başına kasa altını (12 El: belgede yok; doğrusal altı değer)
       hostDailyMax: 1000, hostDailyMatches: 20, hostReputation: 2, hostDailyReputationMax: 40,
@@ -127,28 +129,28 @@
   // ---------- kıraathane: eşya kataloğu, zemin ızgarası, yerleşim doğrulama (sunucu ve istemci aynı kuralı kullanır) ----------
   // footprint: [en, boy] hücre; wall: duvar eşyası (zemine değil, arka duvar şeridine); kind: 'table' oyun masası, 'station' üretim; price: kasa altını
   var VENUE_ITEMS = [
-    { id: 'v_masa', name: 'Okey masası', cat: 'masa', price: 1500, footprint: [2, 2], kind: 'table', seats: 4, tier: 1, sprite: 'masa', desc: 'Dört kişilik oynanabilir masa; etrafındaki 4 hücre koltuk için boş kalır.' },
-    { id: 'v_sandalye', name: 'Sandalye', cat: 'masa', price: 120, footprint: [1, 1], rot: true, tier: 1, sprite: 'sandalye', kind: 'chair', desc: 'Masanın koltuk hücresine konabilir; oyuncu sandalyenin yanına gelip oturur.' },
-    { id: 'v_cayocagi', name: 'Çay ocağı', cat: 'uretim', price: 2500, footprint: [2, 1], kind: 'station', recipe: 'cay', tier: 1, sprite: 'cayocagi', desc: '20 dakikada 10 servis çay üretir (10 altın girdi).' },
-    { id: 'v_tezgah', name: 'Servis tezgâhı', cat: 'uretim', price: 800, footprint: [3, 1], tier: 1, sprite: 'tezgah', desc: 'Servis alanı; yalnız görünüm.' },
-    { id: 'v_hali', name: 'Kilim', cat: 'dekor', price: 400, footprint: [3, 2], floor: true, tier: 1, sprite: 'hali', desc: 'Zemine serilir; üstüne eşya konabilir.' },
-    { id: 'v_lamba', name: 'Ayaklı lamba', cat: 'dekor', price: 350, footprint: [1, 1], tier: 1, sprite: 'lamba', desc: 'Sıcak ışık.' },
-    { id: 'v_soba', name: 'Kuzine soba', cat: 'dekor', price: 900, footprint: [1, 1], tier: 1, sprite: 'soba', desc: 'Kış kahvesi havası.' },
-    { id: 'v_radyo', name: 'Radyo', cat: 'dekor', price: 300, footprint: [1, 1], tier: 1, sprite: 'radyo', desc: 'Eski radyo.' },
-    { id: 'v_fener', name: 'Fener', cat: 'dekor', price: 250, footprint: [1, 1], tier: 1, sprite: 'fener', desc: 'Küçük fener.' },
-    { id: 'v_bitki', name: 'Saksı bitkisi', cat: 'dekor', price: 300, footprint: [1, 1], tier: 1, sprite: 'bitki', desc: 'Yeşillik.' },
-    { id: 'v_kedi', name: 'Beyaz kedi', cat: 'dekor', price: 600, footprint: [1, 1], tier: 1, sprite: 'kedi', desc: 'Kahvenin kedisi.' },
-    { id: 'v_saat', name: 'Duvar saati', cat: 'duvar', price: 300, footprint: [1, 1], wall: true, tier: 1, sprite: 'saat', desc: 'Arka duvara asılır.' },
-    { id: 'v_tablo', name: 'Tablo', cat: 'duvar', price: 450, footprint: [1, 1], wall: true, tier: 1, sprite: 'tablo', desc: 'Manzara tablosu.' },
-    { id: 'v_tv', name: 'Televizyon', cat: 'duvar', price: 1200, footprint: [1, 1], wall: true, tier: 2, sprite: 'tv', desc: 'Eski tüplü televizyon.' },
-    { id: 'v_kahvemakinesi', name: 'Kahve makinesi', cat: 'uretim', price: 4000, footprint: [1, 1], kind: 'station', recipe: 'kahve', tier: 2, sprite: 'kahvemakinesi', desc: '30 dakikada 10 fincan kahve (20 altın girdi).' },
-    { id: 'v_koltuk', name: 'Koltuk takımı', cat: 'dekor', price: 1800, footprint: [3, 2], tier: 2, sprite: 'koltuk', desc: 'Sosyal köşe.' },
-    { id: 'v_koltuktek', name: 'Tekli koltuk', cat: 'dekor', price: 700, footprint: [1, 1], tier: 1, sprite: 'koltukyan', desc: 'Deri tekli koltuk.' },
-    { id: 'v_vitrin', name: 'Vitrin', cat: 'dekor', price: 900, footprint: [1, 1], tier: 1, sprite: 'vitrin', desc: 'Camlı fincan vitrini.' },
-    { id: 'v_buzdolabi', name: 'Buzdolabı', cat: 'dekor', price: 1500, footprint: [1, 1], tier: 2, sprite: 'buzdolabi', desc: 'Eski tip buzdolabı (görünüm).' },
-    { id: 'v_tost', name: 'Tost tezgâhı', cat: 'dekor', price: 1200, footprint: [2, 1], tier: 2, sprite: 'tost', desc: 'Tost makineli tezgâh (görünüm; tost üretimi ileride).' },
-    { id: 'v_muzik', name: 'Müzik kutusu', cat: 'dekor', price: 2500, footprint: [1, 1], tier: 2, sprite: 'muzik', desc: 'Işıklı müzik kutusu.' },
-    { id: 'v_slot', name: 'Slot makinesi', cat: 'eglence', price: 12000, footprint: [1, 1], tier: 3, sprite: 'slot', desc: 'Eğlence (ayrı özellik; henüz kapalı).', locked: true }
+    { id: 'v_masa', name: __L("Okey masası"), cat: 'masa', price: 1500, footprint: [2, 2], kind: 'table', seats: 4, tier: 1, sprite: 'masa', desc: __L("Dört kişilik oynanabilir masa; etrafındaki 4 hücre koltuk için boş kalır.") },
+    { id: 'v_sandalye', name: __L("Sandalye"), cat: 'masa', price: 120, footprint: [1, 1], rot: true, tier: 1, sprite: 'sandalye', kind: 'chair', desc: __L("Masanın koltuk hücresine konabilir; oyuncu sandalyenin yanına gelip oturur.") },
+    { id: 'v_cayocagi', name: __L("Çay ocağı"), cat: 'uretim', price: 2500, footprint: [2, 1], kind: 'station', recipe: 'cay', tier: 1, sprite: 'cayocagi', desc: __L("20 dakikada 10 servis çay üretir (10 altın girdi).") },
+    { id: 'v_tezgah', name: __L("Servis tezgâhı"), cat: 'uretim', price: 800, footprint: [3, 1], tier: 1, sprite: 'tezgah', desc: __L("Servis alanı; yalnız görünüm.") },
+    { id: 'v_hali', name: __L("Kilim"), cat: 'dekor', price: 400, footprint: [3, 2], floor: true, tier: 1, sprite: 'hali', desc: __L("Zemine serilir; üstüne eşya konabilir.") },
+    { id: 'v_lamba', name: __L("Ayaklı lamba"), cat: 'dekor', price: 350, footprint: [1, 1], tier: 1, sprite: 'lamba', desc: __L("Sıcak ışık.") },
+    { id: 'v_soba', name: __L("Kuzine soba"), cat: 'dekor', price: 900, footprint: [1, 1], tier: 1, sprite: 'soba', desc: __L("Kış kahvesi havası.") },
+    { id: 'v_radyo', name: __L("Radyo"), cat: 'dekor', price: 300, footprint: [1, 1], tier: 1, sprite: 'radyo', desc: __L("Eski radyo.") },
+    { id: 'v_fener', name: __L("Fener"), cat: 'dekor', price: 250, footprint: [1, 1], tier: 1, sprite: 'fener', desc: __L("Küçük fener.") },
+    { id: 'v_bitki', name: __L("Saksı bitkisi"), cat: 'dekor', price: 300, footprint: [1, 1], tier: 1, sprite: 'bitki', desc: __L("Yeşillik.") },
+    { id: 'v_kedi', name: __L("Beyaz kedi"), cat: 'dekor', price: 600, footprint: [1, 1], tier: 1, sprite: 'kedi', desc: __L("Kahvenin kedisi.") },
+    { id: 'v_saat', name: __L("Duvar saati"), cat: 'duvar', price: 300, footprint: [1, 1], wall: true, tier: 1, sprite: 'saat', desc: __L("Arka duvara asılır.") },
+    { id: 'v_tablo', name: __L("Tablo"), cat: 'duvar', price: 450, footprint: [1, 1], wall: true, tier: 1, sprite: 'tablo', desc: __L("Manzara tablosu.") },
+    { id: 'v_tv', name: __L("Televizyon"), cat: 'duvar', price: 1200, footprint: [1, 1], wall: true, tier: 2, sprite: 'tv', desc: __L("Eski tüplü televizyon.") },
+    { id: 'v_kahvemakinesi', name: __L("Kahve makinesi"), cat: 'uretim', price: 4000, footprint: [1, 1], kind: 'station', recipe: 'kahve', tier: 2, sprite: 'kahvemakinesi', desc: __L("30 dakikada 10 fincan kahve (20 altın girdi).") },
+    { id: 'v_koltuk', name: __L("Koltuk takımı"), cat: 'dekor', price: 1800, footprint: [3, 2], tier: 2, sprite: 'koltuk', desc: __L("Sosyal köşe.") },
+    { id: 'v_koltuktek', name: __L("Tekli koltuk"), cat: 'dekor', price: 700, footprint: [1, 1], tier: 1, sprite: 'koltukyan', desc: __L("Deri tekli koltuk.") },
+    { id: 'v_vitrin', name: __L("Vitrin"), cat: 'dekor', price: 900, footprint: [1, 1], tier: 1, sprite: 'vitrin', desc: __L("Camlı fincan vitrini.") },
+    { id: 'v_buzdolabi', name: __L("Buzdolabı"), cat: 'dekor', price: 1500, footprint: [1, 1], tier: 2, sprite: 'buzdolabi', desc: __L("Eski tip buzdolabı (görünüm).") },
+    { id: 'v_tost', name: __L("Tost tezgâhı"), cat: 'dekor', price: 1200, footprint: [2, 1], tier: 2, sprite: 'tost', desc: __L("Tost makineli tezgâh (görünüm; tost üretimi ileride).") },
+    { id: 'v_muzik', name: __L("Müzik kutusu"), cat: 'dekor', price: 2500, footprint: [1, 1], tier: 2, sprite: 'muzik', desc: __L("Işıklı müzik kutusu.") },
+    { id: 'v_slot', name: __L("Slot makinesi"), cat: 'eglence', price: 12000, footprint: [1, 1], tier: 3, sprite: 'slot', desc: __L("Eğlence (ayrı özellik; henüz kapalı)."), locked: true }
   ];
   var VENUE_STARTER = ['v_masa', 'v_cayocagi', 'v_sandalye', 'v_sandalye', 'v_hali']; // açılış paketi (bir kez)
   // zemin ızgarası: perspektifli yamuk; kapı alt kenar ortasında; duvar şeridi arka duvarda (wallCols sütun)
@@ -194,29 +196,29 @@
     function key(c) { return c.gx + ',' + c.gy; }
     var byIid = {}; (inventory || []).forEach(function (it) { byIid[it.iid] = it; });
     placements.forEach(function (p) {
-      var inv = byIid[p.iid]; if (!inv) { errors.push('Envanterde olmayan eşya: ' + p.iid); return; }
-      var item = venueItem(inv.item); if (!item) { errors.push('Bilinmeyen eşya: ' + inv.item); return; }
-      if (item.wall) { if (p.gx < 0 || p.gx >= G.cols) errors.push(item.name + ' duvar dışında'); else if (walls[p.gx]) errors.push(item.name + ' başka duvar eşyasıyla çakışıyor'); walls[p.gx] = p.iid; return; }
+      var inv = byIid[p.iid]; if (!inv) { errors.push(__L("Envanterde olmayan eşya: {0}", [(p.iid)])); return; }
+      var item = venueItem(inv.item); if (!item) { errors.push(__L("Bilinmeyen eşya: {0}", [(inv.item)])); return; }
+      if (item.wall) { if (p.gx < 0 || p.gx >= G.cols) errors.push(__L("{0} duvar dışında", [(item.name)])); else if (walls[p.gx]) errors.push(__L("{0} başka duvar eşyasıyla çakışıyor", [(item.name)])); walls[p.gx] = p.iid; return; }
       var cells = footprintCells(item, p);
       cells.forEach(function (c) {
-        if (c.gx < 0 || c.gy < 0 || c.gx >= G.cols || c.gy >= G.rows) { errors.push(item.name + ' zemin dışında'); return; }
-        if (G.doorCols.indexOf(c.gx) >= 0 && c.gy === G.rows - 1) errors.push(item.name + ' kapı önünü kapatıyor');
-        if (!item.floor) { if (occ[key(c)] && !occ[key(c)].floor) errors.push(item.name + ' ile ' + occ[key(c)].name + ' çakışıyor'); occ[key(c)] = item; }
-        else if (occ[key(c)] && occ[key(c)].floor) errors.push('İki kilim üst üste');
+        if (c.gx < 0 || c.gy < 0 || c.gx >= G.cols || c.gy >= G.rows) { errors.push(__L("{0} zemin dışında", [(item.name)])); return; }
+        if (G.doorCols.indexOf(c.gx) >= 0 && c.gy === G.rows - 1) errors.push(__L("{0} kapı önünü kapatıyor", [(item.name)]));
+        if (!item.floor) { if (occ[key(c)] && !occ[key(c)].floor) errors.push(__L("{0} ile {1} çakışıyor", [(item.name), (occ[key(c)].name)])); occ[key(c)] = item; }
+        else if (occ[key(c)] && occ[key(c)].floor) errors.push(__L("İki kilim üst üste"));
       });
       if (item.kind === 'table') tables.push({ p: p, item: item, iid: p.iid });
     });
     // koltuk hücreleri boş ve zemin içinde olmalı
     // koltuk hücresi boş ya da sandalyeli olabilir (sandalye koltuğun kendisidir); başka eşya koltuğu kapatamaz
-    tables.forEach(function (t) { seatCells(t.item, t.p).forEach(function (c) { if (c.gx < 0 || c.gy < 0 || c.gx >= G.cols || c.gy >= G.rows) errors.push(t.item.name + ' koltuğu zemin dışında'); else if (occ[key(c)] && !occ[key(c)].floor && occ[key(c)].kind !== 'chair') errors.push(t.item.name + ' koltuğu ' + occ[key(c)].name + ' ile kapanmış'); }); });
+    tables.forEach(function (t) { seatCells(t.item, t.p).forEach(function (c) { if (c.gx < 0 || c.gy < 0 || c.gx >= G.cols || c.gy >= G.rows) errors.push(__L("{0} koltuğu zemin dışında", [(t.item.name)])); else if (occ[key(c)] && !occ[key(c)].floor && occ[key(c)].kind !== 'chair') errors.push(__L("{0} koltuğu {1} ile kapanmış", [(t.item.name), (occ[key(c)].name)])); }); });
     // yürünebilir hücreler: dolu olmayan (kilim yürünebilir) hücreler; kapıdan BFS
     var walk = {}; for (var gy = 0; gy < G.rows; gy++) for (var gx = 0; gx < G.cols; gx++) { var k = gx + ',' + gy; walk[k] = !occ[k] || !!occ[k].floor; }
     var reach = {}, q = []; G.doorCols.forEach(function (gx) { var k = gx + ',' + (G.rows - 1); if (walk[k]) { reach[k] = true; q.push([gx, G.rows - 1]); } });
     while (q.length) { var c = q.shift(); [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) { var nx = c[0] + d[0], ny = c[1] + d[1], nk = nx + ',' + ny; if (nx < 0 || ny < 0 || nx >= G.cols || ny >= G.rows || reach[nk] || !walk[nk]) return; reach[nk] = true; q.push([nx, ny]); }); }
     // masa erişimi: bir koltuk hücresine yürünebiliyorsa ya da sandalyeli koltuğun komşusuna yürünebiliyorsa
-    tables.forEach(function (t) { var okSeat = seatCells(t.item, t.p).some(function (c) { var k = c.gx + ',' + c.gy; if (reach[k]) return true; if (occ[k] && occ[k].kind === 'chair') return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(function (d) { return reach[(c.gx + d[0]) + ',' + (c.gy + d[1])]; }); return false; }); if (!okSeat) errors.push(t.item.name + ' kapıdan ulaşılamıyor (yol kapalı)'); });
+    tables.forEach(function (t) { var okSeat = seatCells(t.item, t.p).some(function (c) { var k = c.gx + ',' + c.gy; if (reach[k]) return true; if (occ[k] && occ[k].kind === 'chair') return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(function (d) { return reach[(c.gx + d[0]) + ',' + (c.gy + d[1])]; }); return false; }); if (!okSeat) errors.push(__L("{0} kapıdan ulaşılamıyor (yol kapalı)", [(t.item.name)])); });
     var stations = placements.filter(function (p) { var inv = byIid[p.iid]; var it = inv && venueItem(inv.item); return it && it.kind === 'station'; });
-    stations.forEach(function (p) { var it = venueItem(byIid[p.iid].item); var cells = footprintCells(it, p); var near = false; cells.forEach(function (c) { [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) { if (reach[(c.gx + d[0]) + ',' + (c.gy + d[1])]) near = true; }); }); if (!near) errors.push(it.name + ' önüne yürünemiyor'); });
+    stations.forEach(function (p) { var it = venueItem(byIid[p.iid].item); var cells = footprintCells(it, p); var near = false; cells.forEach(function (c) { [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) { if (reach[(c.gx + d[0]) + ',' + (c.gy + d[1])]) near = true; }); }); if (!near) errors.push(__L("{0} önüne yürünemiyor", [(it.name)])); });
     return { ok: errors.length === 0, errors: errors, reach: reach, walk: walk, occ: occ };
   }
   // yürüyüş yolu: BFS (dolu olmayan hücreler); hedef dolu ise hedefe komşu en yakın yürünebilir hücreye
@@ -243,12 +245,12 @@
     if (!pr.npc || pr.npc.day !== dk) pr.npc = { day: dk, profit: 0, sold: 0 };
     Object.keys(pr.stations || {}).forEach(function (sid) {
       var st = pr.stations[sid], rc = R[st.recipe]; if (!rc) return;
-      if (st.batchEndsAt && st.batchEndsAt <= now) { st.stock = Math.min(rc.stockMax, (st.stock || 0) + rc.servings); st.batchEndsAt = 0; lines.push(st.recipe + ': parti bitti, stok ' + st.stock); }
+      if (st.batchEndsAt && st.batchEndsAt <= now) { st.stock = Math.min(rc.stockMax, (st.stock || 0) + rc.servings); st.batchEndsAt = 0; lines.push(__L("{0}: parti bitti, stok {1}", [(st.recipe === 'kahve' ? __L("Kahve") : __L("Çay")), (st.stock)])); }
       // NPC satışı: saatlik talep × geçen süre (en çok 8 saat), stok ve günlük kâr tavanı ile sınırlı
       var demand = Math.floor(rc.npcPerHour * elapsed / 3600000) - (st.demandUsed || 0); if (demand < 0) demand = 0;
       var unitProfit = rc.price - rc.systemFee - rc.inputCost / rc.servings, sold = 0;
       while (demand > 0 && (st.stock || 0) > 0 && pr.npc.profit + unitProfit <= cap) { st.stock--; demand--; sold++; pr.npc.profit += unitProfit; pr.npc.sold++; v.uncollected = (v.uncollected || 0) + (rc.price - rc.systemFee); }
-      if (sold) lines.push(st.recipe + ': NPC ' + sold + ' servis aldı');
+      if (sold) lines.push(__L("{0}: NPC {1} servis aldı", [(st.recipe === 'kahve' ? __L("Kahve") : __L("Çay")), (sold)]));
     });
     pr.settledAt = now;
     Object.keys(pr.stations || {}).forEach(function (sid) { pr.stations[sid].demandUsed = 0; });
@@ -291,7 +293,7 @@
     return 0;
   }
   function humanCoef(humans) { return humans >= 4 ? 1 : (CONFIG.humanCoef[humans] || 0); }
-  function fmt(n) { return String(n).replace('.', ','); } // Türkçe ondalık
+  function fmt(n) { return typeof window !== 'undefined' && window.__LOC === 'en-US' ? String(n) : String(n).replace('.', ','); } // Türkçe ondalık (İngilizcede nokta)
   // eşit sıralar: bağlı konumların ödülleri ortalanır, aşağı yuvarlanır. ranks: [1..4] (eşitlikte aynı sayı)
   function rankShare(table, ranks, me) { // konum = kendisinden iyi sıradakilerin sayısı + 1; bağlı konumların ödülleri ortalanır
     var r = ranks[me], tied = 0, better = 0; for (var i = 0; i < ranks.length; i++) { if (ranks[i] === r) tied++; else if (ranks[i] < r) better++; }
@@ -311,8 +313,8 @@
   }
   function questCheck(e, p, lines) { // birikimli günlük/haftalık el görevleri; otomatik verilir
     var out = [];
-    CONFIG.dailyQuests.forEach(function (q, i) { if (e.hands >= q[0] && e.dailyDone.indexOf(i) < 0) { e.dailyDone.push(i); p.coins += q[1]; p.xp += q[2]; out.push({ type: 'daily', idx: i, hands: q[0], gold: q[1], xp: q[2] }); lines.push('Günlük görev: ' + q[0] + ' el → +' + q[1] + ' altın · +' + q[2] + ' XP'); } });
-    CONFIG.weeklyQuests.forEach(function (q, i) { if (e.weekHands >= q[0] && e.weeklyDone.indexOf(i) < 0) { e.weeklyDone.push(i); p.coins += q[1]; p.xp += q[2]; out.push({ type: 'weekly', idx: i, hands: q[0], gold: q[1], xp: q[2] }); lines.push('Haftalık görev: ' + q[0] + ' el → +' + q[1] + ' altın · +' + q[2] + ' XP'); } });
+    CONFIG.dailyQuests.forEach(function (q, i) { if (e.hands >= q[0] && e.dailyDone.indexOf(i) < 0) { e.dailyDone.push(i); p.coins += q[1]; p.xp += q[2]; out.push({ type: 'daily', idx: i, hands: q[0], gold: q[1], xp: q[2] }); lines.push(__L("Günlük görev: {0} el → +{1} altın · +{2} XP", [(q[0]), (q[1]), (q[2])])); } });
+    CONFIG.weeklyQuests.forEach(function (q, i) { if (e.weekHands >= q[0] && e.weeklyDone.indexOf(i) < 0) { e.weeklyDone.push(i); p.coins += q[1]; p.xp += q[2]; out.push({ type: 'weekly', idx: i, hands: q[0], gold: q[1], xp: q[2] }); lines.push(__L("Haftalık görev: {0} el → +{1} altın · +{2} XP", [(q[0]), (q[1]), (q[2])])); } });
     return out;
   }
   // Uygun insan elini hesaba işle (sunucu: her gerçek oyuncu için). opts: {ranks, me, humans, won}
@@ -322,22 +324,22 @@
     e.hands++; e.weekHands++;
     var rw = handReward({ ranks: opts.ranks, me: opts.me, humans: opts.humans, dayHands: e.hands });
     p.coins = (p.coins || 0) + rw.gold; p.xp = (p.xp || 0) + rw.xp;
-    var rankTxt = opts.ranks[opts.me] + '. sıra';
-    lines.push('El ödülü (' + rankTxt + (rw.coef < 1 ? ', ' + opts.humans + ' insan ×' + fmt(rw.coef) : '') + (rw.rate < 1 ? (rw.rate ? ', günlük %25 bant' : ', günlük sınır doldu') : '') + '): +' + rw.gold + ' altın · +' + rw.xp + ' XP');
+    var rankTxt = __L("{0}. sıra", [(opts.ranks[opts.me])]);
+    lines.push(__L("El ödülü ({0}{1}{2}): +{3} altın · +{4} XP", [(rankTxt), (rw.coef < 1 ? __L(", {0} insan ×{1}", [(opts.humans), (fmt(rw.coef))]) : ''), (rw.rate < 1 ? (rw.rate ? __L(", günlük %25 bant") : __L(", günlük sınır doldu")) : ''), (rw.gold), (rw.xp)]));
     var quests = questCheck(e, p, lines);
-    var lu = levelUps(p, e); if (lu) lines.push('Seviye ' + lu.to + '! +' + lu.gold + ' altın');
+    var lu = levelUps(p, e); if (lu) lines.push(__L("Seviye {0}! +{1} altın", [(lu.to), (lu.gold)]));
     if (p.stats) { if (p.stats.real == null) p.stats.real = p.stats.hands || 0; p.stats.hands = (p.stats.hands || 0) + 1; p.stats.real += 1; } // real (v9.86): gerçek oyuncularla uygun el (mekân hedefi); eski kayıtta önce geçmiş eller sayılır
-    var ar = syncArenas(p); ar.forEach(function (t) { lines.push('Yeni mekân açıldı: ' + arenaName(t) + '!'); });
+    var ar = syncArenas(p); ar.forEach(function (t) { lines.push(__L("Yeni mekân açıldı: {0}!", [(arenaName(t))])); });
     return { gold: rw.gold, xp: rw.xp, coef: rw.coef, rate: rw.rate, dayHands: e.hands, quests: quests, levelUp: lu, lines: lines, training: false, arenas: ar };
   }
   function settleTraining(p, opts, now) { // tek insan (botlara karşı): günde ilk 5 el 4 altın 10 XP; sıralama bonusu yok
     var e = econOf(p, now), lines = [], t = CONFIG.training, gold = 0, xp = 0;
     e.training++;
-    if (e.training <= t.handsPerDay) { gold = t.gold; xp = t.xp; p.coins = (p.coins || 0) + gold; p.xp = (p.xp || 0) + xp; lines.push('Antrenman eli (' + e.training + '/' + t.handsPerDay + '): +' + gold + ' altın · +' + xp + ' XP'); }
-    else lines.push('Antrenman eli: günlük ' + t.handsPerDay + ' el ödülü doldu');
-    var lu = levelUps(p, e); if (lu) lines.push('Seviye ' + lu.to + '! +' + lu.gold + ' altın');
+    if (e.training <= t.handsPerDay) { gold = t.gold; xp = t.xp; p.coins = (p.coins || 0) + gold; p.xp = (p.xp || 0) + xp; lines.push(__L("Antrenman eli ({0}/{1}): +{2} altın · +{3} XP", [(e.training), (t.handsPerDay), (gold), (xp)])); }
+    else lines.push(__L("Antrenman eli: günlük {0} el ödülü doldu", [(t.handsPerDay)]));
+    var lu = levelUps(p, e); if (lu) lines.push(__L("Seviye {0}! +{1} altın", [(lu.to), (lu.gold)]));
     if (p.stats) p.stats.hands = (p.stats.hands || 0) + 1;
-    var ar = syncArenas(p); ar.forEach(function (th) { lines.push('Yeni mekân açıldı: ' + arenaName(th) + '!'); });
+    var ar = syncArenas(p); ar.forEach(function (th) { lines.push(__L("Yeni mekân açıldı: {0}!", [(arenaName(th))])); });
     return { gold: gold, xp: xp, coef: 0, rate: e.training <= t.handsPerDay ? 1 : 0, dayHands: e.hands || 0, quests: [], levelUp: lu, lines: lines, training: true, trainingCount: e.training, arenas: ar };
   }
   // maç tamamlama bonusu: maçın bütün ellerine uygun katılan; katsayı = ellerin katsayı×bant ortalaması
@@ -348,11 +350,11 @@
       var f = opts.factors.reduce(function (s, x) { return s + x; }, 0) / opts.factors.length;
       out.gold = Math.floor(b.gold * f); out.xp = Math.floor(b.xp * f);
       p.coins = (p.coins || 0) + out.gold; p.xp = (p.xp || 0) + out.xp;
-      lines.push(opts.totalHands + ' el tamamlama bonusu: +' + out.gold + ' altın · +' + out.xp + ' XP');
+      lines.push(__L("{0} el tamamlama bonusu: +{1} altın · +{2} XP", [(opts.totalHands), (out.gold), (out.xp)]));
     }
     if (p.stats) { p.stats.matches = (p.stats.matches || 0) + 1; if (opts.rank === 1) p.stats.wins = (p.stats.wins || 0) + 1; }
-    out.levelUp = levelUps(p, e); if (out.levelUp) lines.push('Seviye ' + out.levelUp.to + '! +' + out.levelUp.gold + ' altın');
-    out.arenas = syncArenas(p); out.arenas.forEach(function (t) { lines.push('Yeni mekân açıldı: ' + arenaName(t) + '!'); });
+    out.levelUp = levelUps(p, e); if (out.levelUp) lines.push(__L("Seviye {0}! +{1} altın", [(out.levelUp.to), (out.levelUp.gold)]));
+    out.arenas = syncArenas(p); out.arenas.forEach(function (t) { lines.push(__L("Yeni mekân açıldı: {0}!", [(arenaName(t))])); });
     return out;
   }
   function loginReward(p, now) { // günlük giriş: UTC günü başına bir kez
@@ -367,7 +369,7 @@
     return { gold: CONFIG.tutorial.gold, xp: CONFIG.tutorial.xp, levelUp: lu, arenas: syncArenas(p) };
   }
   // ---------- mekânlar (v9.86, K107): seviye + oynama hedefi ----------
-  var ARENA_NAMES = { koy: 'Köy Meydanı', kahve: 'Köy Kahvesi', sokak: 'Ara Sokak', sanayi: 'Sanayi Çay Ocağı', cinar: 'Çınar Altı', soba: 'Sobalı Kış Kahvesi', apartman: 'Apartman Önü', bag: 'Bağ Evi Verandası', kor: 'Kor Sahanlığı', gok: 'Gök Köprüsü', inci: 'İnci Koyu', kok: 'Kök Çardağı', yildiz: 'Yıldız İskelesi' };
+  var ARENA_NAMES = { koy: __L("Köy Meydanı"), kahve: __L("Köy Kahvesi"), sokak: __L("Ara Sokak"), sanayi: __L("Sanayi Çay Ocağı"), cinar: __L("Çınar Altı"), soba: __L("Sobalı Kış Kahvesi"), apartman: __L("Apartman Önü"), bag: __L("Bağ Evi Verandası"), kor: __L("Kor Sahanlığı"), gok: __L("Gök Köprüsü"), inci: __L("İnci Koyu"), kok: __L("Kök Çardağı"), yildiz: __L("Yıldız İskelesi") };
   function arenaName(theme) { return ARENA_NAMES[theme] || theme; }
   function arenaRule(theme) { for (var i = 0; i < CONFIG.arenas.length; i++) if (CONFIG.arenas[i].theme === theme) return CONFIG.arenas[i]; return null; }
   function arenaProgress(p, theme) { // {level, hands, real: {have, need}, met, open}; p: hesap kaydı ya da cihazdaki kayıt ({xp, stats, arenas})
@@ -403,7 +405,7 @@
     return Math.min(CONFIG.bakMaxCharges, Math.max(0, ownedIntroCount || 0));
   }
   // ---------- lig (v9.87, K108): Döngü Puanı, aylık sezon ----------
-  var AYLAR = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+  var AYLAR = [__L("Ocak"), __L("Şubat"), __L("Mart"), __L("Nisan"), __L("Mayıs"), __L("Haziran"), __L("Temmuz"), __L("Ağustos"), __L("Eylül"), __L("Ekim"), __L("Kasım"), __L("Aralık")];
   function seasonKey(ts) { var d = new Date(ts == null ? Date.now() : ts); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1); }
   function seasonLabel(key) { var p = String(key || '').split('-'), m = parseInt(p[1], 10); return (AYLAR[m - 1] || '?') + ' ' + (p[0] || '?'); }
   function seasonEndsAt(ts) { var d = new Date(ts == null ? Date.now() : ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); }
@@ -441,8 +443,8 @@
     var L = leagueOf(p, now), day = dayKey(now), lines = [], C = CONFIG.league, lab = seasonLabel(L.season);
     if (!L.groups || L.groups.day !== day) L.groups = { day: day, n: {} };
     var g = String(opts.group || ''), used = L.groups.n[g] || 0, dayAll = L.groups.all || 0;
-    if (C.dailyMax && dayAll >= C.dailyMax) { lines.push('Lig: bugün ' + C.dailyMax + ' lig maçı puanlandı; sonraki maçlar yarın yine puan kazandırır (' + lab + ')'); return { counted: false, delta: 0, points: L.points, lines: lines }; } // v10.09 (K173): günlük lig maçı sınırı
-    if (used >= C.sameGroupDaily) { lines.push('Lig: bu oyuncularla bugün ' + C.sameGroupDaily + ' maç puanlandı; bu maç puansız (' + lab + ')'); return { counted: false, delta: 0, points: L.points, lines: lines }; }
+    if (C.dailyMax && dayAll >= C.dailyMax) { lines.push(__L("Lig: bugün {0} lig maçı puanlandı; sonraki maçlar yarın yine puan kazandırır ({1})", [(C.dailyMax), (lab)])); return { counted: false, delta: 0, points: L.points, lines: lines }; } // v10.09 (K173): günlük lig maçı sınırı
+    if (used >= C.sameGroupDaily) { lines.push(__L("Lig: bu oyuncularla bugün {0} maç puanlandı; bu maç puansız ({1})", [(C.sameGroupDaily), (lab)])); return { counted: false, delta: 0, points: L.points, lines: lines }; }
     L.groups.n[g] = used + 1; L.groups.all = dayAll + 1;
     var ff = !!(opts.forfeits && opts.forfeits[opts.me]), base = leagueBase(opts.ranks, opts.me, opts.forfeits);
     var d = leagueDelta(L.points, opts.oppPts || [], base, opts.totalHands), before = L.points;
@@ -450,7 +452,7 @@
     var first = !ff && opts.ranks[opts.me] === 1; if (first) L.wins = (L.wins || 0) + 1;
     if (L.points > (L.best || 0)) L.best = L.points;
     var real = L.points - before;
-    lines.push('Döngü Puanı: ' + (real >= 0 ? '+' : '−') + Math.abs(real) + ' → ' + L.points + ' (' + lab + ' sezonu' + (ff ? ', hükmen son' : '') + ')');
+    lines.push(__L("Döngü Puanı: {0}{1} → {2} ({3} sezonu{4})", [(real >= 0 ? '+' : '−'), (Math.abs(real)), (L.points), (lab), (ff ? __L(", hükmen son") : '')]));
     return { counted: true, delta: real, points: L.points, lines: lines };
   }
   function leagueSummary(p, now) { // arayüz: bu sezonun özeti (kaydı değiştirmez)
