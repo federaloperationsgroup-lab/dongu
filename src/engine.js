@@ -1,0 +1,943 @@
+/* Americano Okey — oyun motoru (kurallar). Hem tarayıcıda hem Node'da çalışır. */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.Okey = factory();
+}(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  var COLORS = ['Ateş', 'Yıldız', 'Su', 'Güneş']; // Döngü aileleri (klasik karşılıkları: kırmızı, siyah, mavi, sarı); sunucu ve istemci aynı adları kullanır
+  var TASKS = [
+    { text: 'Bir adet 3\'lü renkli', req: [['set', 3]] },
+    { text: 'Bir adet 3\'lü seri', req: [['run', 3]] },
+    { text: 'İki ayrı 3\'lü renkli', req: [['set', 3], ['set', 3]] },
+    { text: 'İki ayrı 3\'lü seri', req: [['run', 3], ['run', 3]] },
+    { text: 'Bir 3\'lü renkli + bir 3\'lü seri', req: [['set', 3], ['run', 3]] },
+    { text: 'Bir adet 4\'lü renkli', req: [['set', 4]] },
+    { text: 'Bir adet 4\'lü seri', req: [['run', 4]] },
+    { text: 'İki ayrı 4\'lü renkli', req: [['set', 4], ['set', 4]] },
+    { text: 'İki ayrı 4\'lü seri', req: [['run', 4], ['run', 4]] },
+    { text: 'Bir 4\'lü seri + bir 4\'lü renkli', req: [['run', 4], ['set', 4]] },
+    { text: 'Bir adet 5\'li seri', req: [['run', 5]] },
+    { text: 'Kafa: yere açmadan elden bitiş', req: null }
+  ];
+
+  // ---------- rastgele ----------
+  function makeRng(seed) {
+    var s = seed >>> 0 || 123456789;
+    function rng() { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; rng.s = s; return s / 4294967296; }
+    rng.s = s;
+    return rng;
+  }
+  function serialize(g) { var o = {}; for (var k in g) if (k !== 'rng') o[k] = g[k]; o.rngS = g.rng.s; return JSON.stringify(o); }
+  function deserialize(str) {
+    var g = JSON.parse(str); g.rng = makeRng(g.rngS); delete g.rngS;
+    if (g.phase === 'claim') g.claimTile = topDiscard(g);
+    return g;
+  }
+
+  // ---------- taşlar ----------
+  function buildSet() {
+    var tiles = [], id = 0;
+    for (var copy = 0; copy < 2; copy++)
+      for (var c = 0; c < 4; c++)
+        for (var n = 1; n <= 13; n++) tiles.push({ id: id++, c: c, n: n, fake: false });
+    tiles.push({ id: id++, c: -1, n: 0, fake: true });
+    tiles.push({ id: id++, c: -1, n: 0, fake: true });
+    return tiles;
+  }
+
+  // okeyInfo: { fakeIsOkey, c, n }  (c,n = gerçek okey taşının değeri)
+  function isJoker(t, ok) { return ok.fakeIsOkey ? t.fake : (!t.fake && t.c === ok.c && t.n === ok.n); }
+  function effective(t, ok) { // joker olmayan taşın temsil ettiği değer
+    if (t.fake && !ok.fakeIsOkey) return { c: ok.c, n: ok.n };
+    return { c: t.c, n: t.n };
+  }
+  function tileValue(t, ok) {
+    if (isJoker(t, ok)) return 50;
+    if (t.fake) return 25;
+    return t.n;
+  }
+
+  // ---------- grup kontrolü ----------
+  // dönüş: null | 'set' | 'run' | 'any'
+  function meldKind(tiles, ok) {
+    var len = tiles.length;
+    if (len < 3) return null;
+    var E = [], j = 0;
+    for (var i = 0; i < len; i++) {
+      if (isJoker(tiles[i], ok)) j++; else E.push(effective(tiles[i], ok));
+    }
+    if (E.length === 0) return len <= 4 ? 'set' : null;
+    var setOk = len <= 4, runOk = len <= 13;
+    var seenC = {}, seenN = {}, mn = 99, mx = 0;
+    for (i = 0; i < E.length; i++) {
+      var e = E[i];
+      if (e.n !== E[0].n || seenC[e.c]) setOk = false;
+      seenC[e.c] = true;
+      if (e.c !== E[0].c || seenN[e.n]) runOk = false;
+      seenN[e.n] = true;
+      if (e.n < mn) mn = e.n;
+      if (e.n > mx) mx = e.n;
+    }
+    if (runOk) {
+      var lo = Math.max(1, mx - len + 1), hi = Math.min(mn, 14 - len);
+      if (lo > hi) runOk = false;
+    }
+    if (setOk && runOk) return 'any';
+    if (setOk) return 'set';
+    if (runOk) return 'run';
+    return null;
+  }
+
+  // v9.81: serideki okeyin temsil ettiği sayı (t.rep) açılış/indirme/işleme anında oyuncunun dizdiği sıradan bulunur ve saklanır.
+  // Saklı ve tutarlıysa yerleşim ve okeyin anlamı ondan gelir (eskiden okeyler hep büyük uca yerleşiyordu: "O-O-8" 6-7-8 diye açılınca 8-9-10 sanılıyordu).
+  function repLayout(tiles, ok) {
+    var J = tiles.filter(function (t) { return isJoker(t, ok); });
+    if (!J.length || J.some(function (t) { return t.rep == null; })) return null;
+    var arr = tiles.map(function (t) { return { t: t, n: isJoker(t, ok) ? t.rep : effective(t, ok).n }; });
+    arr.sort(function (a, b) { return a.n - b.n; });
+    for (var i = 0; i < arr.length; i++) { if (arr[i].n < 1 || arr[i].n > 13) return null; if (i && arr[i].n !== arr[i - 1].n + 1) return null; }
+    return arr;
+  }
+  function runRepsFromOrder(tiles, ok) { // oyuncunun sırası (artan ya da azalan; okeyler boşlukları doldurur) → her taşın sayısı; olmazsa null
+    function tryDir(dir) {
+      var base = null;
+      for (var i = 0; i < tiles.length; i++) { if (isJoker(tiles[i], ok)) continue; var b = effective(tiles[i], ok).n - dir * i; if (base === null) base = b; else if (b !== base) return null; }
+      if (base === null) return null;
+      var out = []; for (var k = 0; k < tiles.length; k++) { var n = base + dir * k; if (n < 1 || n > 13) return null; out.push(n); }
+      return out;
+    }
+    return tryDir(1) || tryDir(-1);
+  }
+  function assignRunReps(tiles, ok) { // seri kurulurken: önce oyuncunun sırası, olmazsa varsayılan yerleşim
+    if (!tiles.some(function (t) { return isJoker(t, ok); })) return;
+    var nums = runRepsFromOrder(tiles, ok);
+    if (nums) { tiles.forEach(function (t, i) { if (isJoker(t, ok)) t.rep = nums[i]; }); return; }
+    tiles.forEach(function (t) { if (isJoker(t, ok)) delete t.rep; });
+    var lay = layoutRun(tiles, ok), ri = -1; for (var i = 0; i < lay.length; i++) if (!isJoker(lay[i], ok)) { ri = i; break; }
+    if (ri < 0) return; var n0 = effective(lay[ri], ok).n;
+    lay.forEach(function (t, k) { if (isJoker(t, ok)) t.rep = n0 + (k - ri); });
+  }
+  function currentRunNumbers(m, ok) { // serideki her taşın sayısı (saf): saklı temsil varsa o, yoksa varsayılan yerleşim
+    var rl = repLayout(m.tiles, ok); if (rl) return rl;
+    var lay = layoutRun(m.tiles, ok), ri = -1; for (var i = 0; i < lay.length; i++) if (!isJoker(lay[i], ok)) { ri = i; break; }
+    if (ri < 0) return null; var n0 = effective(lay[ri], ok).n;
+    return lay.map(function (t, k) { return { t: t, n: n0 + (k - ri) }; });
+  }
+  function ensureRunReps(m, ok) { if (m.kind !== 'run') return; var cur = currentRunNumbers(m, ok); if (!cur) return; cur.forEach(function (x) { if (isJoker(x.t, ok)) x.t.rep = x.n; }); } // eski kayıt / eski sürüm masası: okeylerin yeri sabitlenir
+  // seriye yeni taş(lar): sabit sayılar (gerçek taş + okeyin temsili) korunur; yeni gerçek taşlar uçları uzatır ya da boşluk doldurur, yeni okeyler önce boşluklara, sonra büyük uca, sonra küçük uca
+  function runArrange(m, add, ok) {
+    var cur = currentRunNumbers(m, ok); if (!cur) return null;
+    var fixed = [], color = null;
+    for (var i = 0; i < cur.length; i++) { var t = cur[i].t; fixed.push(cur[i].n); if (!isJoker(t, ok)) { var e = effective(t, ok); if (color === null) color = e.c; else if (e.c !== color) return null; } }
+    var used = {}; for (i = 0; i < fixed.length; i++) { if (used[fixed[i]]) return null; used[fixed[i]] = true; }
+    var newJ = [], newR = [];
+    for (i = 0; i < add.length; i++) { var a = add[i]; if (isJoker(a, ok)) { newJ.push(a); continue; } var ea = effective(a, ok); if (color === null) color = ea.c; else if (ea.c !== color) return null; if (used[ea.n]) return null; used[ea.n] = true; newR.push(ea.n); }
+    var nums = Object.keys(used).map(Number).sort(function (x, y) { return x - y; }); if (!nums.length) return null;
+    var lo = nums[0], hi = nums[nums.length - 1], gaps = []; for (var n = lo; n <= hi; n++) if (!used[n]) gaps.push(n);
+    if (gaps.length > newJ.length) return null;
+    var reps = gaps.slice(), k2 = newJ.length - gaps.length;
+    while (k2 > 0 && hi < 13) { reps.push(++hi); k2--; }
+    while (k2 > 0 && lo > 1) { reps.push(--lo); k2--; }
+    if (k2 > 0) return null;
+    if (m.tiles.length + add.length > 13) return null;
+    return newJ.map(function (j, q) { return { t: j, rep: reps[q] }; });
+  }
+
+  // seriyi gösterim için sırala (jokerleri boşluklara/uçlara yerleştir)
+  function layoutRun(tiles, ok) {
+    var rl = repLayout(tiles, ok); if (rl) return rl.map(function (x) { return x.t; });
+    var E = [], J = [];
+    tiles.forEach(function (t) { if (isJoker(t, ok)) J.push(t); else E.push(t); });
+    E.sort(function (a, b) { return effective(a, ok).n - effective(b, ok).n; });
+    if (E.length === 0) return tiles.slice();
+    var len = tiles.length;
+    var mn = effective(E[0], ok).n, mx = effective(E[E.length - 1], ok).n;
+    var start = Math.max(1, Math.min(mn, Math.min(mx - len + 1 + (len - (mx - mn + 1)), 14 - len)));
+    // jokerleri önce iç boşluklara koy, kalanı sona, yer yoksa başa
+    var out = [], ji = 0, pos = mn;
+    var inner = [];
+    for (var i = 0; i < E.length; i++) {
+      var n = effective(E[i], ok).n;
+      while (pos < n && ji < J.length) { inner.push(J[ji++]); pos++; }
+      inner.push(E[i]); pos = n + 1;
+    }
+    out = inner;
+    var rest = J.slice(ji);
+    var room = 13 - mx;
+    while (rest.length && room > 0) { out.push(rest.pop()); room--; }
+    while (rest.length) out.unshift(rest.pop());
+    return out;
+  }
+  function layoutMeld(meld, ok) {
+    if (meld.kind === 'run') return layoutRun(meld.tiles, ok);
+    var E = [], J = [];
+    meld.tiles.forEach(function (t) { if (isJoker(t, ok)) J.push(t); else E.push(t); });
+    E.sort(function (a, b) { return effective(a, ok).c - effective(b, ok).c; });
+    return E.concat(J);
+  }
+
+  function taskAssign(groups, task, ok) { // v9.81: hangi grup hangi görev türünü karşılıyor (açılışta 'any' grubun türü görevden gelir)
+    if (!task.req || groups.length !== task.req.length) return null;
+    var kinds = groups.map(function (g) { return meldKind(g, ok); }); if (kinds.some(function (k) { return !k; })) return null;
+    var asg = [];
+    function perm(used, ri) {
+      if (ri === task.req.length) return true;
+      for (var gi = 0; gi < groups.length; gi++) {
+        var req = task.req[ri];
+        if (used[gi] || groups[gi].length !== req[1] || !(kinds[gi] === 'any' || kinds[gi] === req[0])) continue;
+        used[gi] = true; asg[gi] = req[0];
+        if (perm(used, ri + 1)) return true;
+        used[gi] = false;
+      }
+      return false;
+    }
+    return perm([], 0) ? asg : null;
+  }
+  function groupsSatisfyTask(groups, task, ok) {
+    if (!task.req) return false;
+    if (groups.length !== task.req.length) return false;
+    var kinds = groups.map(function (g) { return meldKind(g, ok); });
+    if (kinds.some(function (k) { return !k; })) return false;
+    function fits(gi, req) { // ilk açılışta per TAM görev uzunluğunda olmalı; fazlalık elde kalır
+      return groups[gi].length === req[1] && (kinds[gi] === 'any' || kinds[gi] === req[0]);
+    }
+    function perm(used, ri) {
+      if (ri === task.req.length) return true;
+      for (var gi = 0; gi < groups.length; gi++) {
+        if (used[gi] || !fits(gi, task.req[ri])) continue;
+        used[gi] = true;
+        if (perm(used, ri + 1)) return true;
+        used[gi] = false;
+      }
+      return false;
+    }
+    return perm([], 0);
+  }
+
+  // ---------- grup üretimi / kaplama (bot ve kafa kontrolü için) ----------
+  function allMelds(hand, ok, maxLen) {
+    maxLen = maxLen || 5;
+    var res = [], seen = {};
+    var byKey = {}, J = [];
+    hand.forEach(function (t, i) {
+      if (isJoker(t, ok)) { J.push(i); return; }
+      var e = effective(t, ok), k = e.c * 20 + e.n;
+      (byKey[k] = byKey[k] || []).push(i);
+    });
+    function push(idx, kind) {
+      idx = idx.slice().sort(function (a, b) { return a - b; });
+      var key = idx.join(',');
+      if (seen[key]) return;
+      seen[key] = true;
+      var tiles = idx.map(function (i) { return hand[i]; });
+      var k = meldKind(tiles, ok);
+      if (k) res.push({ idx: idx, kind: k, tiles: tiles });
+    }
+    // slots: dizi; her slot ya kopya listesi (indeksler) ya da null (yok). jokerler boş slotları doldurur.
+    function expand(slots, kind) {
+      var chosen = [], usedJ = [];
+      function rec(si) {
+        if (si === slots.length) {
+          if (chosen.length >= 3 && usedJ.length < chosen.length) push(chosen, kind);
+          return;
+        }
+        var copies = slots[si];
+        if (copies) copies.forEach(function (ci) { chosen.push(ci); rec(si + 1); chosen.pop(); });
+        for (var ji = 0; ji < J.length; ji++) {
+          if (usedJ.indexOf(ji) >= 0 || (usedJ.length && ji < usedJ[usedJ.length - 1])) continue;
+          usedJ.push(ji); chosen.push(J[ji]); rec(si + 1); chosen.pop(); usedJ.pop();
+        }
+      }
+      rec(0);
+    }
+    // renkli gruplar
+    for (var n = 1; n <= 13; n++) {
+      var cols = [];
+      for (var c = 0; c < 4; c++) if (byKey[c * 20 + n]) cols.push(c);
+      if (cols.length + J.length < 3) continue;
+      // renk alt kümeleri + joker sayısı
+      for (var mask = 1; mask < 16; mask++) {
+        var subset = [];
+        for (c = 0; c < 4; c++) if (mask & (1 << c)) { if (cols.indexOf(c) < 0) { subset = null; break; } subset.push(c); }
+        if (!subset) continue;
+        for (var jk = 0; jk <= J.length && subset.length + jk <= 4; jk++) {
+          if (subset.length + jk < 3) continue;
+          var slots = subset.map(function (cc) { return byKey[cc * 20 + n]; });
+          for (var z = 0; z < jk; z++) slots.push(null);
+          expand(slots, 'set');
+        }
+      }
+    }
+    // seriler
+    for (c = 0; c < 4; c++) {
+      for (var L = 3; L <= maxLen; L++) for (var s = 1; s + L - 1 <= 13; s++) {
+        var sl = [], missing = 0;
+        for (var p = 0; p < L; p++) { var lst = byKey[c * 20 + s + p]; if (!lst) missing++; sl.push(lst || null); }
+        if (missing > J.length || missing === L) continue;
+        expand(sl, 'run');
+      }
+    }
+    return res;
+  }
+
+  // hand'in tamamı (skip tane taş hariç) gruplara bölünebilir mi?
+  function partition(hand, ok, skips) {
+    var n = hand.length;
+    if (n > 24) return null;
+    var melds = allMelds(hand, ok, 5);
+    var byLow = [];
+    for (var i = 0; i < n; i++) byLow.push([]);
+    melds.forEach(function (m) { byLow[m.idx[0]].push(m); });
+    var memo = {};
+    function rec(mask, sk) {
+      if (mask === 0) return [];
+      var key = mask + ':' + sk;
+      if (key in memo) return memo[key];
+      var low = 0; while (!(mask & (1 << low))) low++;
+      var r = null;
+      var list = byLow[low];
+      for (var i = 0; i < list.length && !r; i++) {
+        var m = list[i], mm = 0, okk = true;
+        for (var j = 0; j < m.idx.length; j++) { var b = 1 << m.idx[j]; if (!(mask & b)) { okk = false; break; } mm |= b; }
+        if (!okk) continue;
+        var sub = rec(mask & ~mm, sk);
+        if (sub) r = [m].concat(sub);
+      }
+      if (!r && sk > 0) { var sub2 = rec(mask & ~(1 << low), sk - 1); if (sub2) r = sub2; }
+      memo[key] = r;
+      return r;
+    }
+    return rec((1 << n) - 1, skips);
+  }
+
+  // en çok taşı kaplayan grup seçimi (maks kaplama)
+  function maxCover(hand, ok) {
+    var n = hand.length;
+    if (n === 0) return { count: 0, melds: [] };
+    if (n > 24) return { count: 0, melds: [] };
+    var melds = allMelds(hand, ok, 5);
+    var byLow = [];
+    for (var i = 0; i < n; i++) byLow.push([]);
+    melds.forEach(function (m) { byLow[m.idx[0]].push(m); });
+    var memo = {};
+    function rec(mask) {
+      if (mask === 0) return { count: 0, melds: [] };
+      if (memo[mask]) return memo[mask];
+      var low = 0; while (!(mask & (1 << low))) low++;
+      var best = rec(mask & ~(1 << low));
+      var list = byLow[low];
+      for (var i = 0; i < list.length; i++) {
+        var m = list[i], mm = 0, okk = true;
+        for (var j = 0; j < m.idx.length; j++) { var b = 1 << m.idx[j]; if (!(mask & b)) { okk = false; break; } mm |= b; }
+        if (!okk) continue;
+        var sub = rec(mask & ~mm);
+        if (sub.count + m.idx.length > best.count) best = { count: sub.count + m.idx.length, melds: [m].concat(sub.melds) };
+      }
+      memo[mask] = best;
+      return best;
+    }
+    return rec((1 << n) - 1);
+  }
+
+  // Tek türde (set/run) en iyi örtü: en çok taş, eşitlikte en az okey. Diz menüsü için. (n ≤ 24; daha büyük elde açgözlü)
+  function bestCover(hand, ok, kind, maxLen) {
+    var n = hand.length; if (!n) return { melds: [] };
+    var melds = allMelds(hand, ok, maxLen || 13).filter(function (m) { return m.kind === kind || m.kind === 'any'; });
+    melds.forEach(function (m) { m.jokers = m.tiles.filter(function (t) { return isJoker(t, ok); }).length; });
+    if (n > 24) { // açgözlü: uzun ve okeysiz önce
+      melds.sort(function (a, b) { return (b.idx.length - a.idx.length) || (a.jokers - b.jokers); });
+      var usedG = {}, outG = [];
+      melds.forEach(function (m) { if (m.idx.some(function (i) { return usedG[i]; })) return; m.idx.forEach(function (i) { usedG[i] = true; }); outG.push(m); });
+      return { melds: outG };
+    }
+    var byLow = []; for (var i = 0; i < n; i++) byLow.push([]);
+    melds.forEach(function (m) { byLow[m.idx[0]].push(m); });
+    var memo = {};
+    function rec(mask) {
+      if (mask === 0) return { score: 0, melds: [] };
+      if (memo[mask]) return memo[mask];
+      var low = 0; while (!(mask & (1 << low))) low++;
+      var best = rec(mask & ~(1 << low));
+      var list = byLow[low];
+      for (var i = 0; i < list.length; i++) {
+        var m = list[i], mm = 0, okk = true;
+        for (var j = 0; j < m.idx.length; j++) { var b = 1 << m.idx[j]; if (!(mask & b)) { okk = false; break; } mm |= b; }
+        if (!okk) continue;
+        var sub = rec(mask & ~mm), sc = sub.score + m.idx.length * 1000 - m.jokers * 10;
+        if (sc > best.score) best = { score: sc, melds: [m].concat(sub.melds) };
+      }
+      memo[mask] = best; return best;
+    }
+    return rec((1 << n) - 1);
+  }
+
+  // görevi karşılayan grup kombinasyonu bul (eldeki taşlardan)
+  function findTaskGroups(hand, ok, task) {
+    if (!task.req) return null;
+    var melds = allMelds(hand, ok, task.req.length === 1 ? 6 : 5);
+    function fits(m, req) { return m.idx.length === req[1] && (m.kind === 'any' || m.kind === req[0]); }
+    var best = null;
+    if (task.req.length === 1) {
+      melds.forEach(function (m) {
+        if (fits(m, task.req[0]) && m.idx.length < hand.length && !best) best = [m];
+      });
+      return best;
+    }
+    var A = melds.filter(function (m) { return fits(m, task.req[0]); });
+    var B = melds.filter(function (m) { return fits(m, task.req[1]); });
+    for (var i = 0; i < A.length; i++) for (var j = 0; j < B.length; j++) {
+      var a = A[i], b = B[j];
+      if (a === b) continue;
+      var disjoint = true;
+      for (var k = 0; k < a.idx.length && disjoint; k++) if (b.idx.indexOf(a.idx[k]) >= 0) disjoint = false;
+      if (!disjoint) continue;
+      var tot = a.idx.length + b.idx.length;
+      if (tot >= hand.length) continue;
+      if (!best) best = [a, b];
+    }
+    return best;
+  }
+
+  // ---------- oyun durumu ----------
+  function newGame(opts) {
+    opts = opts || {};
+    var g = {
+      rng: makeRng(opts.seed || (Date.now() & 0x7fffffff)),
+      names: opts.names || ['Sen', 'Ali', 'Ayşe', 'Mehmet'],
+      hand: 0, // 1..12
+      totals: [0, 0, 0, 0],
+      handsWon: [0, 0, 0, 0],
+      penalties: [0, 0, 0, 0], // okey kaptırma cezaları (toplam)
+      rules: { jokerCapturePenalty: opts.jokerCapturePenalty != null ? opts.jokerCapturePenalty : 10, playableDiscardPenalty: opts.playableDiscardPenalty != null ? opts.playableDiscardPenalty : 10, jokerLeftPenalty: opts.jokerLeftPenalty != null ? opts.jokerLeftPenalty : 10 },
+      guaranteedFakeIndicatorHand: 0, // 12 El modunda startHand'de rng ile seçilir; kayda dahil
+      totalHands: 12, taskOrder: null, currentHandIndex: -1, // oyun modu: 1 / 6 / 12 el
+      history: [], // her el: {hand, scores:[..], winner, finishType}
+      dealer: 3,
+      log: [],
+      finished: false
+    };
+    for (var w = 0; w < 10; w++) g.rng(); // xorshift ısınma: küçük tohumlarda ilk değerler yığılıyor
+    var th = opts.totalHands === 1 || opts.totalHands === 6 ? opts.totalHands : 12;
+    g.totalHands = th;
+    g.taskOrder = makeTaskOrder(th, g.rng);
+    return g;
+  }
+
+  // Görev sırası: 12 El klasik sıra; 1 / 6 El için ortak listenin KOPYASI Fisher–Yates ile karıştırılıp ilk n görev alınır (Kafa dahil, tekrar yok)
+  function makeTaskOrder(totalHands, rng) {
+    var ids = TASKS.map(function (_, i) { return i; });
+    if (totalHands >= 12) return ids;
+    shuffle(ids, rng);
+    return ids.slice(0, totalHands);
+  }
+  function shuffle(arr, rng) {
+    for (var i = arr.length - 1; i > 0; i--) { var j = Math.floor(rng() * (i + 1)); var t = arr[i]; arr[i] = arr[j]; arr[j] = t; }
+    return arr;
+  }
+
+  function startHand(g) {
+    g.hand++;
+    if (!g.totalHands) g.totalHands = 12; // eski kayıt
+    if (!g.taskOrder || !g.taskOrder.length) g.taskOrder = makeTaskOrder(12, g.rng);
+    g.currentHandIndex = g.hand - 1;
+    if (g.totalHands >= 12 && !g.guaranteedFakeIndicatorHand) g.guaranteedFakeIndicatorHand = g.hand + Math.floor(g.rng() * (13 - g.hand)); // hand..12 arası; sadece 12 El
+    var deck = shuffle(buildSet(), g.rng);
+    var ind;
+    if (g.totalHands >= 12 && g.hand === g.guaranteedFakeIndicatorHand) { // garanti sahte okey göstergeli el: sahte taşı desteden ayır
+      var fi = -1; for (var di = deck.length - 1; di >= 0; di--) if (deck[di].fake) { fi = di; break; }
+      ind = deck.splice(fi, 1)[0];
+    } else ind = deck.pop();
+    var ok;
+    if (ind.fake) ok = { fakeIsOkey: true, c: -1, n: 0 };
+    else ok = { fakeIsOkey: false, c: ind.c, n: ind.n === 13 ? 1 : ind.n + 1 };
+    g.indicator = ind;
+    g.ok = ok;
+    g.task = TASKS[g.taskOrder[g.currentHandIndex]]; // aktif görev el numarasından değil taskOrder'dan
+    g.deck = deck;
+    g.players = [];
+    for (var p = 0; p < 4; p++) g.players.push({ hand: deck.splice(0, 14), opened: false, openedThisTurn: false, discards: [], thrown: {} }); // thrown: bu elde attığı taş kimlikleri (bot al-at döngüsünü keser)
+    g.handPen = [0, 0, 0, 0]; // bu eldeki okey kaptırma cezaları
+    g.handPenDisc = [0, 0, 0, 0]; // bu eldeki işlek taş atma cezaları
+    if (!g.penalties) g.penalties = [0, 0, 0, 0];
+    if (!g.rules) g.rules = { jokerCapturePenalty: 10 };
+    if (g.rules.playableDiscardPenalty == null) g.rules.playableDiscardPenalty = 10;
+    if (g.rules.jokerLeftPenalty == null) g.rules.jokerLeftPenalty = 10;
+    g.table = []; // {tiles, kind, owner}
+    g.dealer = (g.dealer + 1) % 4;
+    g.cp = (g.dealer + 1) % 4;
+    g.phase = 'pickup';
+    g.claimQueue = [];
+    g.claimTile = null;
+    g.lastDiscarder = null;
+    g.handOver = null;
+    g.log = [];
+    g.turnNo = 0;
+  }
+
+  function log(g, msg) { g.log.push(msg); if (g.log.length > 200) g.log.shift(); }
+
+  function topDiscard(g) {
+    if (g.lastDiscarder === null) return null;
+    var d = g.players[g.lastDiscarder].discards;
+    return d.length ? d[d.length - 1] : null;
+  }
+
+  function removeTile(hand, tile) {
+    var i = hand.indexOf(tile);
+    if (i < 0) throw new Error('taş elde yok');
+    hand.splice(i, 1);
+  }
+
+  function handDetail(g, winner, mult, winScore, reason) {
+    return g.players.map(function (pl, i) {
+      var tiles = pl.hand.map(function (t) { return { c: t.c, n: t.n, fake: t.fake, id: t.id }; });
+      var base = tiles.reduce(function (s, t) { return s + tileValue(t, g.ok); }, 0);
+      var hp = (g.handPen && g.handPen[i]) || 0, hd = (g.handPenDisc && g.handPenDisc[i]) || 0;
+      // elde kalan okey cezası: o el gerçekten joker olan her taş için +N (nasıl geldiği fark etmez; okey başına tek ceza)
+      var jl = i === winner ? 0 : tiles.filter(function (t) { return isJoker(t, g.ok); }).length * ((g.rules && g.rules.jokerLeftPenalty != null) ? g.rules.jokerLeftPenalty : 10);
+      var pen = hp + hd + jl;
+      var hpr = []; if (hp) hpr.push('Okey kaptırma cezası: +' + hp); if (hd) hpr.push('İşlek taş atma cezası: +' + hd); if (jl) hpr.push('Elde okey bırakma cezası: +' + jl);
+      if (i === winner) return { tiles: [], count: 0, base: 0, mult: 1, bonus: winScore, penalty: pen, jokerPen: hp, discardPen: hd, jokerLeftPen: 0, score: winScore + pen, reasons: ['Eli bitirdi: ' + winScore].concat(hpr) };
+      var reasons = ['Kalan ' + tiles.length + ' taş: ' + base];
+      if (mult > 1) reasons.push(reason + ' ×' + mult);
+      return { tiles: tiles, count: tiles.length, base: base, mult: mult, bonus: 0, penalty: pen, jokerPen: hp, discardPen: hd, jokerLeftPen: jl, score: base * mult + pen, reasons: reasons.concat(hpr) };
+    });
+  }
+  function endHandNoWinner(g) {
+    var detail = handDetail(g, null, 1, 0, '');
+    finishHand(g, detail.map(function (d) { return d.score; }), null, 'Taş bitti, kimse bitiremedi', detail);
+  }
+
+  function finishHand(g, scores, winner, finishType, detail) {
+    for (var i = 0; i < 4; i++) g.totals[i] += scores[i];
+    if (winner !== null) g.handsWon[winner]++;
+    var totals = g.totals.slice(), won = g.handsWon.slice();
+    var rank = [0, 1, 2, 3].sort(function (a, b) { return (totals[a] - totals[b]) || (won[b] - won[a]); });
+    var ranks = []; rank.forEach(function (p, i) { ranks[p] = i + 1; });
+    g.history.push({ hand: g.hand, scores: scores, winner: winner, finishType: finishType, detail: detail, totals: totals, ranks: ranks });
+    g.handOver = { scores: scores, winner: winner, finishType: finishType, detail: detail, totals: totals, ranks: ranks };
+    g.phase = 'handover';
+    if (g.hand >= (g.totalHands || 12)) g.finished = true;
+    log(g, finishType);
+  }
+
+  // --- aksiyonlar ---
+  function canTakeDiscard(g) {
+    return g.phase === 'pickup' && topDiscard(g) !== null;
+  }
+
+  function actDraw(g) {
+    if (g.phase !== 'pickup') throw new Error('sıra çekme değil');
+    var p = g.players[g.cp];
+    if (g.deck.length === 0) { endHandNoWinner(g); return; }
+    p.hand.push(g.deck.pop());
+    log(g, g.names[g.cp] + ' ortadan çekti');
+    // sırası olmayanlar atılan taşı isteyebilir
+    g.claimTile = topDiscard(g);
+    g.claimQueue = [];
+    if (g.claimTile && g.deck.length > 0) {
+      g.claimQueue = [(g.lastDiscarder + 2) % 4, (g.lastDiscarder + 3) % 4];
+    }
+    g.phase = g.claimQueue.length ? 'claim' : 'play';
+  }
+
+  function actTake(g) {
+    if (!canTakeDiscard(g)) throw new Error('alınacak taş yok');
+    var t = g.players[g.lastDiscarder].discards.pop();
+    g.players[g.cp].hand.push(t);
+    log(g, g.names[g.cp] + ' yandan ' + tileName(t) + ' aldı');
+    g.phase = 'play';
+  }
+
+  function claimant(g) { return g.phase === 'claim' ? g.claimQueue[0] : null; }
+
+  function actClaim(g, player, yes) {
+    if (g.phase !== 'claim' || g.claimQueue[0] !== player) throw new Error('talep sırası değil');
+    if (yes) {
+      var t = g.players[g.lastDiscarder].discards.pop();
+      var p = g.players[player];
+      p.hand.push(t);
+      p.hand.push(g.deck.pop());
+      log(g, g.names[player] + ' sıra dışı ' + tileName(t) + ' aldı (+1 ortadan)');
+      g.claimQueue = [];
+    } else {
+      g.claimQueue.shift();
+    }
+    if (g.claimQueue.length === 0) g.phase = 'play';
+  }
+
+  function actOpen(g, groups) { // groups: taş dizileri
+    if (g.phase !== 'play') throw new Error('oynama sırası değil');
+    var p = g.players[g.cp];
+    if (p.opened) throw new Error('zaten açıldı');
+    if (!g.task.req) throw new Error('kafa elinde açılmaz');
+    if (g.turnNo < 4) throw new Error('İlk turda kimse açılamaz; herkes bir kez oynadıktan sonra açılabilirsin.');
+    if (!groupsSatisfyTask(groups, g.task, g.ok)) throw new Error('Görev tam karşılanmıyor: ' + taskText(g.task));
+    var seen = {}, used = 0;
+    groups.forEach(function (gr) { gr.forEach(function (t) { if (seen[t.id]) throw new Error('aynı taş iki grupta kullanılamaz'); seen[t.id] = true; if (p.hand.indexOf(t) < 0) throw new Error('taş elinde değil'); }); used += gr.length; });
+    if (used >= p.hand.length) throw new Error('atacak taş kalmalı');
+    var asg = taskAssign(groups, g.task, g.ok) || [];
+    groups.forEach(function (gr, gi) {
+      gr.forEach(function (t) { removeTile(p.hand, t); });
+      var k = meldKind(gr, g.ok);
+      markPlaced(g, gr);
+      var kind = k === 'any' ? (asg[gi] || (gr.length > 4 ? 'run' : 'set')) : k; // v9.81: "O-O-8" seri görevinde seri sayılır (eskiden renkli sayılıyordu → okey alınamıyordu)
+      if (kind === 'run') assignRunReps(gr, g.ok);
+      g.table.push({ tiles: gr.slice(), kind: kind, owner: g.cp });
+    });
+    p.opened = true; p.openedThisTurn = true; p.openedTurnNo = g.turnNo; // açılış sırası kaydı: işleme izni sonraki kendi sırasında
+    log(g, g.names[g.cp] + ' yere açıldı');
+  }
+
+  function lockedAfterOpen(g, p) { return p.openedThisTurn || p.openedTurnNo === g.turnNo; }
+  function taskText(task) { return task.req.map(function (r) { return r[1] + (r[0] === 'set' ? "'lü renkli" : (r[1] === 5 ? "'li seri" : "'lü seri")); }).join(' + '); }
+  function actLay(g, tiles, kindHint) {
+    if (g.phase !== 'play') throw new Error('oynama sırası değil');
+    var p = g.players[g.cp];
+    if (!p.opened || lockedAfterOpen(g, p)) throw new Error('Açıldığın sırada ek per indirilmez; bir sonraki sıranda indirebilirsin.');
+    var k = meldKind(tiles, g.ok);
+    if (!k) throw new Error('geçersiz grup');
+    if (tiles.length >= p.hand.length) throw new Error('atacak taş kalmalı');
+    checkInHand(p, tiles); // önce doğrula, sonra değiştir: yarım kalmış hamle olmasın
+    tiles.forEach(function (t) { removeTile(p.hand, t); });
+    markPlaced(g, tiles);
+    var kind = k === 'any' ? ((kindHint === 'run' || kindHint === 'set') ? kindHint : (tiles.length > 4 ? 'run' : 'set')) : k;
+    if (kind === 'run') assignRunReps(tiles, g.ok); // v9.81
+    g.table.push({ tiles: tiles.slice(), kind: kind, owner: g.cp });
+    log(g, g.names[g.cp] + ' yeni grup koydu');
+  }
+  function checkInHand(p, tiles) { // hepsi elde ve her taş bir kez
+    var seen = {};
+    tiles.forEach(function (t) { if (!t || seen[t.id]) throw new Error('aynı taş iki kez kullanılamaz'); seen[t.id] = true; if (p.hand.indexOf(t) < 0) throw new Error('taş elinde değil'); });
+  }
+
+  function canAddTo(g, meldIdx, tiles) {
+    var m = g.table[meldIdx];
+    if (!m) return false;
+    var combined = m.tiles.concat(tiles);
+    var k = meldKind(combined, g.ok);
+    if (!k) return false;
+    if (m.kind === 'set' && k === 'run') return false;
+    if (m.kind === 'run' && k === 'set') return false;
+    if (m.kind === 'run' && combined.some(function (t) { return isJoker(t, g.ok); })) return !!runArrange(m, tiles, g.ok); // v9.81: okeylerin temsil ettiği yerler sabit (okeyin yerine gelen taş işleme değil, okey değişimidir)
+    return true;
+  }
+
+  function actAdd(g, meldIdx, tiles) {
+    if (g.phase !== 'play') throw new Error('oynama sırası değil');
+    var p = g.players[g.cp];
+    if (!p.opened || lockedAfterOpen(g, p)) throw new Error(p.opened ? 'Açıldığın sırada işleme yapılmaz; bir sonraki sıranda işleyebilirsin.' : 'önce açılmalı');
+    if (!g.table[meldIdx]) throw new Error('per bulunamadı');
+    if (!canAddTo(g, meldIdx, tiles)) throw new Error('bu gruba uymuyor');
+    if (tiles.length >= p.hand.length) throw new Error('atacak taş kalmalı');
+    checkInHand(p, tiles);
+    var m = g.table[meldIdx], arr = null;
+    if (m.kind === 'run') { arr = runArrange(m, tiles, g.ok); if (!arr) throw new Error('bu gruba uymuyor'); ensureRunReps(m, g.ok); }
+    tiles.forEach(function (t) { removeTile(p.hand, t); });
+    markPlaced(g, tiles);
+    if (arr) arr.forEach(function (x) { x.t.rep = x.rep; }); // v9.81: yeni okeyin yeri
+    m.tiles = m.tiles.concat(tiles);
+    log(g, g.names[g.cp] + ' masaya taş işledi');
+  }
+
+  // ---------- masadaki okeyi gerçek taşla alma ----------
+  function markPlaced(g, tiles) { tiles.forEach(function (t) { if (isJoker(t, g.ok)) t.placedBy = g.cp; }); }
+  // perdeki bir okeyin temsil ettiği değer(ler): {n, colors:[...]} ; run'da tek renk, set'te eksik renkler
+  function jokerMeaning(g, meldIdx, joker) {
+    var m = g.table[meldIdx], ok = g.ok;
+    if (m.kind === 'run') {
+      var lay = layoutRun(m.tiles, ok), ji = lay.indexOf(joker), ri = -1;
+      for (var i = 0; i < lay.length; i++) if (!isJoker(lay[i], ok)) { ri = i; break; }
+      if (ji < 0 || ri < 0) return null;
+      var e = effective(lay[ri], ok), n = e.n + (ji - ri);
+      if (n < 1 || n > 13) return null;
+      return { n: n, colors: [e.c] };
+    }
+    // Renkli grup: okey ancak per DOLUNCA (4 taş) eksik renk(ler)le alınabilir; per dolmadan eksik renk gelince grup genişler (okey masada kalır).
+    // Tek okey: üç gerçek renk + okey → eksik dördüncü renk. v9.98 (K128): iki okey: iki gerçek renk + iki okey → eksik iki renk (eskiden real<3 şartı
+    // yüzünden iki okeyli renkli perden okey HİÇ alınamıyordu — tester bulgusu).
+    var real = m.tiles.filter(function (t) { return !isJoker(t, ok); }), jn = m.tiles.length - real.length;
+    if (!real.length || !jn || m.tiles.length < 4) return null;
+    var n0 = effective(real[0], ok).n, have = {};
+    real.forEach(function (t) { have[effective(t, ok).c] = true; });
+    var missing = [0, 1, 2, 3].filter(function (c) { return !have[c]; });
+    if (missing.length !== jn) return null;
+    return { n: n0, colors: missing };
+  }
+  function findSwapJoker(g, meldIdx, tile) { var pl = planSwap(g, meldIdx, [tile]); return pl ? pl.pairs[0].joker : null; }
+  function canSwapJoker(g, meldIdx, tile) { return canSwapJokers(g, meldIdx, [tile]); }
+  // v9.81: bir ya da birden çok okeyi TEK İŞLEMDE gerçek taşlarla değiştir. Her taş farklı bir okeyin temsil ettiği taşa birebir uymalı (aynı taş iki okeyin
+  // karşılığı sayılmaz); okeylerin anlamı DEĞİŞİMDEN ÖNCEKİ perden bulunur (renkli grupta "üç gerçek renk + okey" kuralı aynen: iki renk + okey'den alınmaz).
+  // Ya hepsi olur ya hiçbiri; son per geçerli olmalı. Ceza her okey için o okeyi masaya koyana (kendi okeyini alana yok; K98).
+  function planSwap(g, meldIdx, tiles) {
+    var m = g.table[meldIdx], ok = g.ok; if (!m || !tiles || !tiles.length) return null;
+    var seen = {}, jokers = m.tiles.filter(function (t) { return isJoker(t, ok); }), mean = jokers.map(function (j) { return jokerMeaning(g, meldIdx, j); }), usedJ = {}, pairs = [];
+    for (var i = 0; i < tiles.length; i++) {
+      var t = tiles[i]; if (!t || isJoker(t, ok) || seen[t.id]) return null; seen[t.id] = true;
+      var e = effective(t, ok), hit = -1;
+      for (var k = 0; k < jokers.length; k++) { if (usedJ[k] || !mean[k]) continue; if (mean[k].n === e.n && mean[k].colors.indexOf(e.c) >= 0) { hit = k; break; } }
+      if (hit < 0) return null; usedJ[hit] = true; pairs.push({ tile: t, joker: jokers[hit], n: mean[hit].n });
+    }
+    var trial = m.tiles.slice(); pairs.forEach(function (pr) { trial[trial.indexOf(pr.joker)] = pr.tile; });
+    var kk = meldKind(trial, ok);
+    if (!kk || (m.kind === 'run' && kk === 'set') || (m.kind === 'set' && kk === 'run')) return null;
+    return { m: m, pairs: pairs, trial: trial };
+  }
+  function canSwapJokers(g, meldIdx, tiles) {
+    if (g.phase !== 'play') return false;
+    var p = g.players[g.cp];
+    if (!p.opened || lockedAfterOpen(g, p)) return false;
+    for (var i = 0; i < tiles.length; i++) if (p.hand.indexOf(tiles[i]) < 0) return false;
+    return !!planSwap(g, meldIdx, tiles);
+  }
+  function actSwapJokers(g, meldIdx, tiles) {
+    if (g.phase !== 'play') throw new Error('oynama sırası değil');
+    var p = g.players[g.cp];
+    if (!p.opened || lockedAfterOpen(g, p)) throw new Error('Okey almak için açılmış olmalısın; açıldığın sırada yapılamaz.');
+    tiles.forEach(function (t) { if (p.hand.indexOf(t) < 0) throw new Error('taş elinde değil'); });
+    var plan = planSwap(g, meldIdx, tiles);
+    if (!plan) throw new Error(tiles.length > 1 ? 'Bu taşlar perdeki okeylerin yerine birebir geçmiyor.' : 'Bu taş, perdeki okeyin yerine geçmiyor.');
+    var m = plan.m; if (m.kind === 'run') ensureRunReps(m, g.ok); // eski masa: kalan okeylerin yeri sabitlensin
+    // uygula (hepsi birden)
+    plan.pairs.forEach(function (pr) { removeTile(p.hand, pr.tile); });
+    m.tiles = plan.trial; markPlaced(g, plan.pairs.map(function (pr) { return pr.tile; }));
+    var per = {}, selfN = 0, total = 0, capPen = g.rules.jokerCapturePenalty || 0;
+    plan.pairs.forEach(function (pr) {
+      var j = pr.joker, victim = j.placedBy != null ? j.placedBy : m.owner; // okeyi masaya EN SON koyan sorumlu
+      delete j.placedBy; delete j.rep; p.hand.push(j);
+      if (victim === g.cp) { selfN++; return; }
+      g.penalties[victim] += capPen; g.handPen[victim] += capPen; per[victim] = (per[victim] || 0) + capPen; total += capPen;
+    });
+    var parts = Object.keys(per).map(function (v) { return g.names[v] + ' +' + per[v] + ' ceza puanı'; });
+    var n = plan.pairs.length, msg;
+    if (n === 1) msg = selfN ? g.names[g.cp] + ' kendi okeyini geri aldı. Ceza yok.' : g.names[g.cp] + ', ' + g.names[Object.keys(per)[0]] + "'in okeyini aldı. " + parts[0] + '.';
+    else msg = g.names[g.cp] + ' ' + n + ' okeyi birden aldı. ' + (parts.length ? parts.join(', ') + '.' : '') + (selfN ? (parts.length ? ' ' : '') + (selfN === n ? 'Hepsi kendi okeyiydi: ceza yok.' : selfN + ' tanesi kendi okeyiydi (cezasız).') : '');
+    log(g, msg);
+    var victims = Object.keys(per).map(Number);
+    return { victim: victims.length ? victims[0] : g.cp, victims: victims, penalty: total, perVictim: per, self: !victims.length, taken: n, message: msg };
+  }
+  function actSwapJoker(g, meldIdx, tile) { return actSwapJokers(g, meldIdx, [tile]); }
+
+  // atılacak taş masaya işlenebiliyor mu? (pere ekleme veya okeyin yerine koyma). Açılmış-açılmamış herkes için geçerli (7 Ekim 2026 kararı);
+  // tek muafiyet: açıldığı turda işleme hakkı olmayan oyuncu. Bitiş taşı için ceza actDiscard'da ayrıca muaf tutulur.
+  function discardIsPlayable(g, p, tile) {
+    if (p.opened && lockedAfterOpen(g, p)) return false;
+    for (var i = 0; i < g.table.length; i++) {
+      if (canAddTo(g, i, [tile])) return true;
+      if (findSwapJoker(g, i, tile)) return true;
+    }
+    return false;
+  }
+  function actDiscard(g, tile) {
+    if (g.phase !== 'play') throw new Error('oynama sırası değil');
+    var p = g.players[g.cp];
+    var isKafa = !g.task.req;
+    var finishing = false;
+    if (isKafa) {
+      var rest = p.hand.filter(function (t) { return t !== tile; });
+      if (partition(rest, g.ok, 0)) finishing = true;
+    } else if (p.hand.length === 1) {
+      if (!p.opened) throw new Error('açılmadan bitilmez');
+      finishing = true;
+    }
+    var discPen = 0;
+    if (!finishing && discardIsPlayable(g, p, tile)) { // işlek taş atma cezası (bir atış için tek ceza)
+      discPen = g.rules.playableDiscardPenalty != null ? g.rules.playableDiscardPenalty : 10;
+      if (!g.handPenDisc) g.handPenDisc = [0, 0, 0, 0];
+      g.handPenDisc[g.cp] += discPen;
+    }
+    removeTile(p.hand, tile);
+    p.discards.push(tile);
+    if (!p.thrown) p.thrown = {};
+    p.thrown[tile.id] = 1;
+    p.openedThisTurn = false;
+    g.lastDiscarder = g.cp;
+    g.turnNo++;
+    log(g, g.names[g.cp] + ' ' + tileName(tile) + ' attı');
+    if (discPen) log(g, g.names[g.cp] + ' masaya işlenebilen bir taş attı: +' + discPen + ' ceza puanı');
+    if (finishing) {
+      var mult = 1, winScore = -10, type = 'Normal bitiş';
+      if (isJoker(tile, g.ok)) {
+        if (g.ok.fakeIsOkey) { mult = 4; winScore = -40; type = 'Sahte okey ile bitiş (×4)'; }
+        else { mult = 2; winScore = -20; type = 'Okeyle bitiş (×2)'; }
+      }
+      if (isKafa) p.hand = []; // kafa: kalan taşlar gruplar halinde bitti
+      var detail = handDetail(g, g.cp, mult, winScore, type);
+      finishHand(g, detail.map(function (d) { return d.score; }), g.cp, g.names[g.cp] + ' bitirdi — ' + type, detail);
+      if (g.handOver) g.handOver.finishTile = { id: tile.id, c: tile.c, n: tile.n, fake: !!tile.fake }; // v10.06 (K160): bitiş taşı ORTADA gösterilir (klasik okeyde ortaya kapatma; tester: "biterken ortaya atmak istiyorum"). Taş kayıtta atılanlarda kalır (106 taş korunur); arayüz köşede göstermez
+      return { playablePenalty: 0, finishTile: tile.id };
+    }
+    g.cp = (g.cp + 1) % 4;
+    g.phase = 'pickup';
+    if (g.deck.length === 0 && !topDiscard(g)) endHandNoWinner(g);
+    return { playablePenalty: discPen, message: discPen ? 'Masaya işlenebilen bir taş attın: +' + discPen + ' ceza puanı' : '' };
+  }
+
+  function roundNo(g) { return Math.floor(g.turnNo / 4) + 1; }
+
+  function tileName(t) {
+    if (t.fake) return 'Sahte Okey';
+    return COLORS[t.c] + ' ' + t.n;
+  }
+
+  // ---------- bot ----------
+  function neighborScore(hand, ok) {
+    var s = 0;
+    for (var i = 0; i < hand.length; i++) {
+      if (isJoker(hand[i], ok)) { s += 3; continue; }
+      var a = effective(hand[i], ok);
+      for (var j = i + 1; j < hand.length; j++) {
+        if (isJoker(hand[j], ok)) continue;
+        var b = effective(hand[j], ok);
+        if (a.n === b.n && a.c !== b.c) s += 1;
+        else if (a.c === b.c && Math.abs(a.n - b.n) === 1) s += 1;
+        else if (a.c === b.c && Math.abs(a.n - b.n) === 2) s += 0.5;
+      }
+    }
+    return s;
+  }
+  function handScore(hand, ok, task) {
+    var cov = maxCover(hand, ok).count;
+    var s = 3 * cov + neighborScore(hand, ok);
+    if (task && task.req && findTaskGroups(hand, ok, task)) s += 10;
+    return s;
+  }
+
+  function weakOf(g, seat) { var w = g.botWeak && g.botWeak[seat]; return w === true ? 1 : (+w || 0); } // v10.09 (K171): bahisli masadaki gizli bot zayıf oynar (kullanıcı kararı); 0 normal … 1 en zayıf
+  function botChooseDiscard(g, p, weak) {
+    var hand = p.hand, best = null, bestS = -1e9, scored = [];
+    var ok = g.ok;
+    for (var i = 0; i < hand.length; i++) {
+      var t = hand[i];
+      var rest = hand.slice(0, i).concat(hand.slice(i + 1));
+      var s = handScore(rest, ok, p.opened ? null : g.task);
+      s += tileValue(t, ok) * 0.05; // yüksek taşı atmayı tercih
+      if (isJoker(t, ok)) s -= 100;
+      if (discardIsPlayable(g, p, t)) s -= (p.opened ? 40 : 15); // işlek taş atma cezasından kaçın (açılmamışken ceza 10 puan: el planını bozmaktan daha ucuz olabilir)
+      if (s > bestS) { bestS = s; best = t; }
+      if (!isJoker(t, ok)) scored.push({ t: t, s: s });
+    }
+    if (weak && scored.length > 2 && Math.random() < 0.35 * weak) { // zayıf bot: arada en iyi olmayan bir taşı atar (en iyi 5'ten biri)
+      scored.sort(function (a, b) { return b.s - a.s; }); var alt = scored.slice(1, 6);
+      if (alt.length) return alt[Math.floor(Math.random() * alt.length)].t;
+    }
+    return best;
+  }
+
+  function botWantsTile(g, player, tile, outOfTurn) {
+    var p = g.players[player];
+    var ok = g.ok;
+    if (!outOfTurn && p.thrown && p.thrown[tile.id]) return false; // bu elde kendi attığı taşı yandan geri almaz (al-at döngüsünü keser; alınan taş yığından çıktığı için kalıcı kayıt)
+    var before = handScore(p.hand, ok, p.opened ? null : g.task);
+    var after = handScore(p.hand.concat([tile]), ok, p.opened ? null : g.task);
+    if (p.opened && !outOfTurn) {
+      for (var i = 0; i < g.table.length; i++) if (canAddTo(g, i, [tile])) return true;
+    }
+    var wk = weakOf(g, player); if (wk) { if (Math.random() < 0.3 * wk) return false; return outOfTurn ? after - before >= 9 + Math.round(4 * wk) : after - before >= 2 + Math.round(2 * wk); } // zayıf bot taşı daha az görür
+    if (outOfTurn) return after - before >= 9; // bir grup tamamlıyor / görev açıyor
+    return after - before >= 2;
+  }
+
+  // bot bir tam tur oynar (pickup -> play -> discard); claim fazlarını da çözer
+  function botPickup(g) {
+    var cp = g.cp;
+    var td = topDiscard(g);
+    if (td && botWantsTile(g, cp, td, false)) actTake(g); else actDraw(g);
+  }
+
+  function botClaim(g) {
+    var cl = claimant(g);
+    actClaim(g, cl, botWantsTile(g, cl, g.claimTile, true));
+  }
+
+  function botPlay(g) {
+    var cp = g.cp, p = g.players[cp], ok = g.ok, weak = weakOf(g, cp);
+    var keep = g.botCalm ? 3 : 1; // v9.89 (K111): eğitim botu dersi bozmaz — eli bitirmez (en az 3 taş tutar), kafa görevinde bitirmez
+    if (!g.task.req) { // kafa
+      if (g.botCalm) { // sakin bot: eli bitirmeyecek bir taş at (kalan el tam dizilmesin); hepsi bitiriyorsa (olağanüstü) ilk taşı at
+        var pick = botChooseDiscard(g, p), cand = [pick].concat(p.hand.filter(function (t) { return t !== pick; }));
+        for (var ci = 0; ci < cand.length; ci++) { var rest2 = p.hand.filter(function (t) { return t !== cand[ci]; }); if (!(rest2.length && partition(rest2, ok, 0))) { actDiscard(g, cand[ci]); return; } }
+        actDiscard(g, pick); return;
+      }
+      var fin = null;
+      for (var i = 0; i < p.hand.length; i++) {
+        var rest = p.hand.slice(0, i).concat(p.hand.slice(i + 1));
+        if (rest.length && partition(rest, ok, 0)) { if (!fin || isJoker(p.hand[i], ok)) fin = p.hand[i]; }
+      }
+      if (weak && fin && Math.random() < 0.35 * weak) fin = null; // zayıf bot bitirmeyi kaçırabilir
+      actDiscard(g, fin || botChooseDiscard(g, p, weak));
+      return;
+    }
+    if (!p.opened) {
+      var grs = g.turnNo >= 4 ? findTaskGroups(p.hand, ok, g.task) : null;
+      if (grs && weak && Math.random() < 0.5 * weak) grs = null; // zayıf bot açılmayı geciktirir
+      if (grs) actOpen(g, grs.map(function (m) { return m.tiles; }));
+      actDiscard(g, botChooseDiscard(g, p, weak));
+      return;
+    }
+    // açılmış: olabildiğince yere koy / işle, 1 taş kalsın
+    var guard = 0;
+    while (guard++ < 30 && p.hand.length > keep) {
+      // önce jokersiz gruplar (jokeri son taş olarak atmak için sakla)
+      var nonJ = p.hand.filter(function (t) { return !isJoker(t, ok); });
+      var cover = maxCover(nonJ, ok);
+      if (cover.count === 0) cover = maxCover(p.hand, ok);
+      if (cover.count > 0 && p.hand.length - cover.melds[0].tiles.length >= keep) { actLay(g, cover.melds[0].tiles); continue; }
+      // masadaki okeyi gerçek taşla al (varsa)
+      var swapped = false;
+      for (var sh = 0; sh < p.hand.length && !swapped; sh++) {
+        for (var smi = 0; smi < g.table.length; smi++) { if (canSwapJoker(g, smi, p.hand[sh])) { actSwapJoker(g, smi, p.hand[sh]); swapped = true; break; } }
+      }
+      if (swapped) continue;
+      // masaya işle
+      var added = false;
+      for (var h = 0; h < p.hand.length && !added; h++) {
+        var t = p.hand[h];
+        if (isJoker(t, ok) && nonJ.length > 0) continue;
+        for (var mi = 0; mi < g.table.length; mi++) {
+          if (canAddTo(g, mi, [t])) { actAdd(g, mi, [t]); added = true; break; }
+        }
+      }
+      if (!added) break;
+    }
+    actDiscard(g, botChooseDiscard(g, p, weak));
+  }
+
+  function botStep(g) { // bir adım
+    if (g.phase === 'pickup') botPickup(g);
+    else if (g.phase === 'claim') botClaim(g);
+    else if (g.phase === 'play') botPlay(g);
+  }
+
+  // v9.76 "Maçın anı": maç geçmişinden türetilen, sunucunun da istemcinin de aynı biçimde hesapladığı tek olay cümlesi ("en iyi hamle" yargısı yok; yalnız olmuş olay).
+  // Öncelik: sahte okeyle ×4 bitiş → son elde birincilik değişti → okeyle ×2 bitiş → kafa eli bitişi → en çok el bitiren → en yakın fark → taş bitti.
+  function matchMoment(g) {
+    var H = g.history || []; if (!H.length || !g.names) return null;
+    var N = g.names, last = H[H.length - 1], first = last.ranks.indexOf(1), cnt = H.length;
+    var say = function (text, seat, kind) { return { text: text, seat: seat, kind: kind }; };
+    for (var i = 0; i < cnt; i++) if (H[i].winner != null && /×4/.test(H[i].finishType)) return say(N[H[i].winner] + ', ' + H[i].hand + '. eli özel elde sahte okeyle bitirdi (×4).', H[i].winner, 'x4');
+    if (cnt >= 2) { var prev = H[cnt - 2], prevFirst = prev.ranks.indexOf(1); if (prevFirst !== first && prev.ranks[first] >= 3) return say(N[first] + ' son elde ' + prev.ranks[first] + '. sıradan birinciliğe çıktı.', first, 'comeback'); if (prevFirst !== first) return say('Birincilik son elde el değiştirdi: ' + N[first] + ' öne geçti, ' + N[prevFirst] + ' geriye düştü.', first, 'lastHand'); }
+    for (var j = 0; j < cnt; j++) if (H[j].winner != null && /×2/.test(H[j].finishType)) return say(N[H[j].winner] + ', ' + H[j].hand + '. eli okeyle bitirdi (×2).', H[j].winner, 'x2');
+    for (var k = 0; k < cnt; k++) if (H[k].winner != null && H[k].detail && H[k].detail[H[k].winner] && H[k].detail[H[k].winner].count === 0 && /kafa/i.test((g.taskOrder && TASKS[g.taskOrder[k]] ? TASKS[g.taskOrder[k]].text : ''))) return say(N[H[k].winner] + ' kafa elini açılmadan tek seferde bitirdi.', H[k].winner, 'kafa');
+    var won = [0, 0, 0, 0]; H.forEach(function (h) { if (h.winner != null) won[h.winner]++; });
+    var top = won.indexOf(Math.max.apply(null, won));
+    if (cnt >= 3 && won[top] >= 2 && won[top] * 2 >= cnt) return say(N[top] + ' bu maçta ' + won[top] + ' el bitirdi (' + cnt + ' elde).', top, 'hands');
+    var order = [0, 1, 2, 3].sort(function (a, b) { return last.totals[a] - last.totals[b]; }); var gap = last.totals[order[1]] - last.totals[order[0]];
+    if (cnt >= 2 && gap <= 5) return say('Birincilik ' + gap + ' puanla belirlendi: ' + N[order[0]] + ' önde, ' + N[order[1]] + ' ikinci.', order[0], 'close');
+    if (last.winner == null) return say('Son elde taş bitti, kimse bitiremedi.', null, 'deckOut');
+    if (last.winner != null) return say(N[last.winner] + ' son eli bitirdi.', last.winner, 'last');
+    return null;
+  }
+  return {
+    matchMoment: matchMoment,
+    COLORS: COLORS, TASKS: TASKS,
+    buildSet: buildSet, isJoker: isJoker, effective: effective, tileValue: tileValue, tileName: tileName,
+    meldKind: meldKind, layoutMeld: layoutMeld, groupsSatisfyTask: groupsSatisfyTask,
+    partition: partition, maxCover: maxCover, bestCover: bestCover, findTaskGroups: findTaskGroups,
+    newGame: newGame, startHand: startHand, makeTaskOrder: makeTaskOrder, serialize: serialize, deserialize: deserialize, makeRng: makeRng, topDiscard: topDiscard, claimant: claimant,
+    canTakeDiscard: canTakeDiscard, canAddTo: canAddTo, roundNo: roundNo,
+    actDraw: actDraw, actTake: actTake, actClaim: actClaim, actOpen: actOpen, actLay: actLay, actAdd: actAdd, actDiscard: actDiscard, canSwapJoker: canSwapJoker, actSwapJoker: actSwapJoker, canSwapJokers: canSwapJokers, actSwapJokers: actSwapJokers, taskAssign: taskAssign, discardIsPlayable: discardIsPlayable, handDetail: handDetail, jokerMeaning: jokerMeaning,
+    botStep: botStep, botWantsTile: botWantsTile
+  };
+}));
