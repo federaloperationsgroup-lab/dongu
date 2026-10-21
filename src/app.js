@@ -6,7 +6,7 @@
   if (window.DonguI18n && DonguI18n.en && window.Okey && Okey.COLORS) Okey.COLORS.splice(0, 4, 'Fire', 'Star', 'Water', 'Sun');
   var SC = 1; // sahne ölçeği (1600×900 -> ekran)
   var ME = 0;
-  var VERSION = '10.12';
+  var VERSION = '10.13';
   var INVITE_ON = true; // v10.10 (K177): masa daveti / "Bu grupla yeniden" / arkadaşla "Oyna" — sunucu desteğiyle birlikte açılır
   // v10.02 (K139): mağaza uygulaması (Capacitor, Android + iOS) — sayfa paketten (capacitor://localhost / https://localhost) açılır, sunucu sabit dongu.app
   var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -484,20 +484,20 @@
   function charLayers(a, pose) {
     a = effectiveAvatar(normAvatar(a)); var g = a.gender, p = pose === 'left' || pose === 'right' ? 'yan' : pose === 'front' || pose === 'on' ? 'on' : pose === 'back' || pose === 'arka' ? 'arka' : pose;
     var L = [], erase = [], rear = [];
-    var gp = function (slot) { var v = a[slot], it = gardrop(slot, v); if (!it) return null; var base = 'assets/ch/' + g + '-' + v + '-' + p + '.webp'; if (it.erase) erase.push('assets/ch/erase-' + g + '-' + v + '-' + p + '.webp'); if (it.rear.indexOf('masa/' + p) >= 0) rear.push({ src: 'assets/ch/' + g + '-' + v + '-' + p + '-rear.webp', kind: it.tint ? 'hair' : null, color: a.hairColor }); return { src: base, kind: it.tint ? 'hair' : null, color: a.hairColor }; };
+    var gp = function (slot) { var v = a[slot], it = gardrop(slot, v); if (!it) return null; var base = 'assets/ch/' + g + '-' + v + '-' + p + '.webp'; if (it.erase) erase.push('assets/ch/erase-' + g + '-' + v + '-' + p + '.webp'); if (it.rear.indexOf('masa/' + p) >= 0) rear.push({ src: 'assets/ch/' + g + '-' + v + '-' + p + '-rear.webp', kind: it.tint ? 'hair' : null, color: a.hairColor, slot: slot, rear: true }); return { src: base, kind: it.tint ? 'hair' : null, color: a.hairColor, slot: slot }; }; // v10.13: slot etiketi (gardırop rig'i katmanları kemiklere dağıtır)
     var pants = gp('pants'), outfit = gp('outfit'), neck = gp('necklace'), ear = gp('earring'), beard = gp('beard'), mous = gp('moustache'), hair = gp('hair'), eye = gp('eyewear'), head = gp('headwear'), wrist = gp('wrist'), mak = gp('makeup');
-    L.push({ src: 'assets/ch/govde-' + g + '-' + p + '.webp', kind: 'skin', mask: 'assets/ch/ten-maske-' + g + '-' + p + '.webp', color: a.skin, erase: erase });
+    L.push({ src: 'assets/ch/govde-' + g + '-' + p + '.webp', kind: 'skin', mask: 'assets/ch/ten-maske-' + g + '-' + p + '.webp', color: a.skin, erase: erase, slot: 'skin' });
     if (mak && p !== 'arka') L.push(mak); // v9.96: makyaj (ruj) tenin üstünde, giysi/saçın altında
     if (pants) L.push(pants);
-    L.push(outfit || { src: 'assets/ch/' + g + '-ust-' + a.outfit + '-' + p + '.webp' });
+    L.push(outfit || { src: 'assets/ch/' + g + '-ust-' + a.outfit + '-' + p + '.webp', slot: 'outfit' });
     if (neck) L.push(neck);
     if (ear && !a.showcaseEar) L.push(ear);
-    if (beard) L.push(beard); else if (a.beard !== 'yok' && p !== 'arka') L.push({ src: 'assets/ch/' + g + '-sakal-' + a.beard + '-' + p + '.webp', kind: 'hair', color: a.hairColor });
+    if (beard) L.push(beard); else if (a.beard !== 'yok' && p !== 'arka') L.push({ src: 'assets/ch/' + g + '-sakal-' + a.beard + '-' + p + '.webp', kind: 'hair', color: a.hairColor, slot: 'beard' });
     if (mous) L.push(mous);
-    if (hair) L.push(hair); else if (a.hair !== 'yok') L.push({ src: (a.acc === 'bere' || a.hatHair ? 'assets/ch/bere-sac-' : 'assets/ch/' + g + '-sac-') + a.hair + '-' + p + '.webp', kind: 'hair', color: a.hairColor });
+    if (hair) L.push(hair); else if (a.hair !== 'yok') L.push({ src: (a.acc === 'bere' || a.hatHair ? 'assets/ch/bere-sac-' : 'assets/ch/' + g + '-sac-') + a.hair + '-' + p + '.webp', kind: 'hair', color: a.hairColor, slot: 'hair' });
     if (ear && a.showcaseEar) L.push(ear); // v9.94: mağaza önizlemesinde küpe saçın önünde (uzun saç küpeyi örtüyordu; kuşanınca normal katman sırası)
     if (eye) L.push(eye);
-    if (a.acc !== 'yok') L.push({ src: 'assets/ch/' + g + '-aks-' + a.acc + '-' + p + '.webp' });
+    if (a.acc !== 'yok') L.push({ src: 'assets/ch/' + g + '-aks-' + a.acc + '-' + p + '.webp', slot: 'acc', acc: a.acc });
     if (head) L.push(head);
     if (wrist) L.push(wrist);
     return rear.concat(L);
@@ -554,6 +554,87 @@
       return c.toDataURL('image/png');
     });
     return compCache[key];
+  }
+  // ---------- v10.13 (üretim 08-A/B/C, K167): oyuncunun kendi karakteri parçalı — ten gövdesi rig'i + giysi parçaları + mevcut saç/sakal/aksesuar katmanları kemiklere bağlı ----------
+  var RIG_OUTFITS = ['mont-mavi', 'deri-ceket', 'kapusonlu', 'gunes-dikisi', 'gece-kimono', 'nane-atolye', 'mercan-ritim']; // 08-B'de parçalanan 7 üst giysi; dg24 üstler ve özel karakterler eski tek resim
+  var GRIG = { cache: {}, order: [], MAX: 10 };
+  function rigOutfit(a) { var o = String(a.outfit || '').replace(/^ust-/, ''); return RIG_OUTFITS.indexOf(o) >= 0 ? o : null; } // 'mont-mavi' (temel) ya da 'ust-gunes-dikisi' (gardırop ürünü) → 08-B dosya kökü
+  function canGardropRig(a) { a = effectiveAvatar(normAvatar(a)); return !!(window.Rig && window.Rig.register && (!a.full || a.full === 'yok' || !FULL_CHARS[a.full]) && rigOutfit(a) && !settings.noRig); }
+  function alphaUnion(ims) { var c = document.createElement('canvas'); c.width = CS; c.height = CS; var x = c.getContext('2d'); ims.forEach(function (im) { if (im) x.drawImage(im, 0, 0, CS, CS); }); return c; }
+  function alphaBox(im) { var c = document.createElement('canvas'); c.width = CS; c.height = CS; var x = c.getContext('2d'); x.drawImage(im, 0, 0, CS, CS); var d = x.getImageData(0, 0, CS, CS).data; return d; }
+  function overlapScore(da, db) { var n = 0; for (var i = 3; i < da.length; i += 16) if (da[i] > 40 && db[i] > 40) n++; return n; } // iki alfa kanalının örtüşmesi (4 pikselde bir örnek)
+  function toBlobUrl(c, urls) { return new Promise(function (res) { if (!c.toBlob) { res(c.toDataURL('image/png')); return; } c.toBlob(function (b) { if (!b) { res(c.toDataURL('image/png')); return; } var u = URL.createObjectURL(b); urls.push(u); res(u); }, 'image/png'); }); }
+  function gardropRig(a0, view) { // → Promise<rig adı | null>; aynı görünüm için bir kez üretilir (blob), en çok GRIG.MAX ayrı karakter bellekte
+    a0 = effectiveAvatar(normAvatar(a0)); if (!canGardropRig(a0)) return Promise.resolve(null);
+    var a = a0, g = a.gender, p = view === 'yan' || view === 'left' || view === 'right' ? 'yan' : view === 'on' || view === 'front' ? 'on' : null; if (!p) return Promise.resolve(null); // arka görünüm yok (08'de istenmedi)
+    var key = ['g1', g, p, a.skin, a.hair, a.hairColor, a.beard, a.outfit, a.acc, a.moustache, a.pants, a.headwear, a.eyewear, a.necklace, a.earring, a.wrist, a.makeup].join('|');
+    if (GRIG.cache[key]) return GRIG.cache[key];
+    var name = 'gardrop:' + key.length + ':' + Math.abs(key.split('').reduce(function (h, ch) { return (h * 31 + ch.charCodeAt(0)) | 0; }, 7)).toString(36) + ':' + p;
+    var pr = Rig.load('ten-' + g).then(function (def) {
+      if (!def || !def.gorunumler || !def.gorunumler[p]) return null;
+      var V = def.gorunumler[p], base = 'assets/rig/ten-' + g + '/', GB = 'assets/rig/gardrop/' + g + '-ust-' + rigOutfit(a) + '-' + p + '-';
+      var bones = {}; V.parcalar.forEach(function (x) { bones[x.ad] = x; });
+      var armNames = p === 'on' ? ['ustkol-sol', 'ustkol-sag', 'onkol-sol', 'onkol-sag'] : ['ustkol-on', 'ustkol-arka', 'onkol-on', 'onkol-arka'];
+      var handNames = p === 'on' ? ['el-sol', 'el-sag'] : ['el-on', 'el-arka'];
+      var all = charLayers(a, p), skinL = all.filter(function (l) { return l.slot === 'skin'; })[0], eraseSrc = (skinL && skinL.erase) || []; // dg24 üstlerin silme maskeleri: eski tek resimde gövdeyi giysi dışında siliyordu; rig'de beyaz içliğe uygulanır
+      var layers = all.filter(function (l) { return l.slot && l.slot !== 'skin' && l.slot !== 'outfit'; });
+      var urls = [], jobs = [];
+      var L = function (src) { return loadImg(src).catch(function () { return null; }); };
+      // yükle: ten gövdesi + baş varyantları + eller + giysi parçaları + statik katmanlar
+      var need = { govde: L(base + bones.govde.dosya), bas: L(base + bones.bas.dosya) };
+      Object.keys(bones.bas.varyant || {}).forEach(function (k) { need['bas:' + k] = L(base + bones.bas.varyant[k]); });
+      handNames.forEach(function (h) { need[h] = L(base + bones[h].dosya); Object.keys(bones[h].varyant || {}).forEach(function (k) { need[h + ':' + k] = L(base + bones[h].varyant[k]); }); });
+      armNames.forEach(function (n) { need['giysi:' + n] = L(GB + n + '.webp'); need['ten:' + n] = L(base + bones[n].dosya); }); need['giysi:govde'] = L(GB + 'govde.webp');
+      layers.forEach(function (l, i) { need['lay:' + i] = L(l.src); }); eraseSrc.forEach(function (u, i) { need['erase:' + i] = L(u); });
+      var keys = Object.keys(need);
+      return Promise.all(keys.map(function (k) { return need[k]; })).then(function (ims) {
+        var im = {}; keys.forEach(function (k, i) { im[k] = ims[i]; });
+        if (!im.govde || !im.bas || !im['giysi:govde']) return null;
+        var parts = [], out = {};
+        var tint = function (i2) { return tintCanvas(i2, 'skin', a.skin, i2); };
+        // gövde: beyaz içlik yalnız giysinin örtmediği yerde (08-C notu: nötr birleşik giysi alfasının tersi), altında pantolon, üstünde giysi gövdesi
+        var gc = document.createElement('canvas'); gc.width = CS; gc.height = CS; var gx = gc.getContext('2d'); gx.drawImage(im.govde, 0, 0, CS, CS);
+        var union = alphaUnion([im['giysi:govde']].concat(armNames.map(function (n) { return im['giysi:' + n]; })));
+        gx.globalCompositeOperation = 'destination-out'; gx.drawImage(union, 0, 0); eraseSrc.forEach(function (u, i) { if (im['erase:' + i]) gx.drawImage(im['erase:' + i], 0, 0, CS, CS); }); gx.globalCompositeOperation = 'source-over';
+        layers.forEach(function (l, i) { if (l.slot === 'pants' && im['lay:' + i]) gx.drawImage(im['lay:' + i], 0, 0, CS, CS); });
+        gx.drawImage(im['giysi:govde'], 0, 0, CS, CS);
+        jobs.push(toBlobUrl(gc, urls).then(function (u) { out.govde = u; }));
+        jobs.push(toBlobUrl(tint(im.bas), urls).then(function (u) { out.bas = u; }));
+        Object.keys(bones.bas.varyant || {}).forEach(function (k) { if (im['bas:' + k]) jobs.push(toBlobUrl(tint(im['bas:' + k]), urls).then(function (u) { out['bas:' + k] = u; })); });
+        handNames.forEach(function (h) { if (im[h]) jobs.push(toBlobUrl(tint(im[h]), urls).then(function (u) { out[h] = u; })); Object.keys(bones[h].varyant || {}).forEach(function (k) { if (im[h + ':' + k]) jobs.push(toBlobUrl(tint(im[h + ':' + k]), urls).then(function (u) { out[h + ':' + k] = u; })); }); });
+        // statik katmanlar → kemik grupları
+        var groups = { basArka: [], basOn: [], basMakyaj: [], govdeUst: [] }, wristL = [];
+        layers.forEach(function (l, i) { var ii = im['lay:' + i]; if (!ii) return; var e = { im: ii, l: l };
+          if (l.rear) groups.basArka.push(e);
+          else if (l.slot === 'makeup') groups.basMakyaj.push(e);
+          else if (l.slot === 'necklace' || (l.slot === 'acc' && l.acc === 'fular')) groups.govdeUst.push(e);
+          else if (l.slot === 'wrist') wristL.push(e);
+          else if (l.slot !== 'pants') groups.basOn.push(e); });
+        var bake = function (list) { var c = document.createElement('canvas'); c.width = CS; c.height = CS; var x = c.getContext('2d'); list.forEach(function (e) { if (e.l.kind === 'hair') x.drawImage(tintCanvas(e.im, 'hair', e.l.color, null), 0, 0); else x.drawImage(e.im, 0, 0, CS, CS); }); return c; };
+        var extra = [];
+        var addStatic = function (nm, list, parent, z) { if (!list.length) return; var c = bake(list); jobs.push(toBlobUrl(c, urls).then(function (u) { extra.push({ ad: nm, pivot: bones[parent].pivot, ebeveyn: parent, dosya: u, z: z, boyut: [CS, CS] }); })); };
+        addStatic('sac-arka', groups.basArka, 'bas', -1); addStatic('makyaj', groups.basMakyaj, 'bas', bones.bas.z + 0.1); addStatic('bas-ust', groups.basOn, 'bas', 20); addStatic('govde-ust', groups.govdeUst, 'govde', 15);
+        if (wristL.length) { // bilek: hangi ön kol / elle örtüşüyorsa ona bağlanır (en üstte çizilir)
+          var wd = alphaBox(wristL[0].im), best = null, bs = -1; armNames.slice(2).concat(handNames).forEach(function (n) { var ii = im['ten:' + n] || im[n]; if (!ii) return; var sc = overlapScore(wd, alphaBox(ii)); if (sc > bs) { bs = sc; best = n; } });
+          addStatic('bilek', wristL, best || 'govde', 30); }
+        return Promise.all(jobs).then(function () {
+          V.parcalar.forEach(function (x) { var q = { ad: x.ad, pivot: x.pivot, ebeveyn: x.ebeveyn, z: x.z, boyut: x.boyut, dosya: null, varyant: null }; delete q.varyant;
+            if (x.ad === 'govde') q.dosya = out.govde;
+            else if (x.ad === 'bas') { q.dosya = out.bas; q.varyant = {}; Object.keys(x.varyant || {}).forEach(function (k) { if (out['bas:' + k]) q.varyant[k] = out['bas:' + k]; }); }
+            else if (handNames.indexOf(x.ad) >= 0) { q.dosya = out[x.ad]; q.varyant = {}; Object.keys(x.varyant || {}).forEach(function (k) { if (out[x.ad + ':' + k]) q.varyant[k] = out[x.ad + ':' + k]; }); if (x.varyant_tutma) q.varyant_tutma = x.varyant_tutma; if (x.tutma) q.tutma = x.tutma; }
+            else if (armNames.indexOf(x.ad) >= 0) q.dosya = im['giysi:' + x.ad] ? GB + x.ad + '.webp' : base + x.dosya; // giysi kolu ten kolunun yerine (aynı pivot); giysi parçası yoksa beyaz içlik kolu
+            else q.dosya = base + x.dosya;
+            if (!q.dosya) return; parts.push(q); });
+          var nd = { surum: 1, karakter: name, tuval: CS, varsayilan_ifade: def.varsayilan_ifade, varsayilan_el: def.varsayilan_el, varsayilan_prop_gorunur: false, gorunumler: {}, _urls: urls };
+          nd.gorunumler[p] = { parcalar: parts.concat(extra), proplar: [] };
+          Rig.register(name, nd);
+          GRIG.order.push(name); var inUse = {}; Rig.instances().forEach(function (i) { inUse[i.char] = 1; }); // ekranda kurulu olanlar atılmaz; en eski boştakiler atılır
+          for (var oi = 0; oi < GRIG.order.length && GRIG.order.length > GRIG.MAX; ) { var old = GRIG.order[oi]; if (inUse[old]) { oi++; continue; } GRIG.order.splice(oi, 1); Rig.unregister(old); Object.keys(GRIG.cache).forEach(function (k) { if (GRIG.cache[k]._name === old) delete GRIG.cache[k]; }); }
+          return name;
+        });
+      });
+    }).catch(function () { return null; });
+    pr._name = name; GRIG.cache[key] = pr; return pr;
   }
   var BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
   // <img class="av"> döndürür; hazır olunca kaynağı dolar
@@ -1140,17 +1221,22 @@
     var s = NET.seats[(p + NET.seat) % 4]; return s && !s.bot && s.prof && s.prof.level ? s.prof.level : 0;
   }
   function rigSeat(p) { // K121: koltuktaki özel karakter için rig varsa (assets/rig/<karakter>/rig.json) tek resmin yerine parçalı karakter kurulur; yoksa hiçbir şey değişmez
-    if (!window.Rig || p === ME) return; var sa = seatAvatar(p); if (!sa || sa.bot || !sa.full || sa.full === 'yok' || !FULL_CHARS[sa.full]) return;
-    var char = sa.full, el = $(SEAT[p].ch), avw = el && el.querySelector('.avw'); if (!avw) return;
-    Rig.load(char).then(function (def) { if (!def || !built || !avw.isConnected || avw.classList.contains('rig')) return; Rig.mount(avw, char, SEAT[p].pose === 'front' ? 'on' : 'yan', { phase: p * 1.6, reduce: !!settings.reduceMotion, mirror: SEAT[p].pose === 'left', events: { servis: function (ev, hp) { cayCups(); } } }); });
+    if (!window.Rig || p === ME) return; var sa = seatAvatar(p); if (!sa || sa.bot) return;
+    var el = $(SEAT[p].ch), avw = el && el.querySelector('.avw'); if (!avw) return; var view = SEAT[p].pose === 'front' ? 'on' : 'yan', mo = { phase: p * 1.6, reduce: !!settings.reduceMotion, mirror: SEAT[p].pose === 'left', events: { servis: function (ev, hp) { cayCups(); } } };
+    if (sa.full && sa.full !== 'yok' && FULL_CHARS[sa.full]) { var char = sa.full; Rig.load(char).then(function (def) { if (!def || !built || !avw.isConnected || avw.classList.contains('rig')) return; Rig.mount(avw, char, view, mo); }); return; }
+    if (!canGardropRig(sa)) return; // v10.13 (08-C): oyuncunun kendi karakteri de parçalı
+    gardropRig(sa, view).then(function (name) { if (!name || !built || !avw.isConnected || avw.classList.contains('rig')) return; Rig.mount(avw, name, view, mo); });
   }
   function rigOf(p) { if (!window.Rig) return null; var el = p === ME ? $('meAv') : $(SEAT[p] ? SEAT[p].ch : 'chMe'); return Rig.instances().filter(function (i) { return el && el.contains(i.host); })[0] || null; } // v9.97: kendi rig'in portre dairesinde
   function rigMe() { // v9.97: kendi portren (sol alt daire) rig'li karakterde parçalı: 'on' görünümünün baş+omuz kırpımı; Çay Servisi kendi ekranında da elde tepsiyle oynar; masadaki arka görünüm (#chMe) eski resim
     if (!window.Rig || !G) return; Rig.instances().forEach(function (i) { if (!i.host.isConnected) Rig.unmount(i); }); var host = $('meAv') && $('meAv').querySelector('.avw'); if (!host) return;
-    var a = normAvatar(myAvatar || DEFAULT_AV); if (!a.full || a.full === 'yok' || !FULL_CHARS[a.full]) { if (host.classList.contains('rig')) Rig.unmountAll(host); host.dataset.rigChar = ''; return; }
-    if (host.dataset.rigChar === a.full && host.classList.contains('rig')) return;
-    if (host.dataset.rigLoading === a.full) return; host.dataset.rigLoading = a.full;
-    Rig.load(a.full).then(function (def) { if (host.dataset.rigLoading === a.full) host.dataset.rigLoading = ''; if (!def || !G || !host.isConnected) return; var cur = normAvatar(myAvatar || DEFAULT_AV); if (cur.full !== a.full) return; Rig.unmountAll(host); Rig.mount(host, a.full, 'on', { phase: 0.9, reduce: !!settings.reduceMotion, crop: [96, 0, 288, 288], events: { servis: function () { cayCups(); } } }); host.dataset.rigChar = a.full; });
+    var a = normAvatar(myAvatar || DEFAULT_AV); var isFull = !!(a.full && a.full !== 'yok' && FULL_CHARS[a.full]), gr = !isFull && canGardropRig(a);
+    if (!isFull && !gr) { if (host.classList.contains('rig')) Rig.unmountAll(host); host.dataset.rigChar = ''; return; }
+    var sig = isFull ? a.full : 'gardrop:' + meSig(a); // v10.13: kendi karakter değişince portre rig'i yenilenir
+    if (host.dataset.rigChar === sig && host.classList.contains('rig')) return;
+    if (host.dataset.rigLoading === sig) return; host.dataset.rigLoading = sig;
+    var ld = isFull ? Rig.load(a.full).then(function (def) { return def ? a.full : null; }) : gardropRig(a, 'on');
+    ld.then(function (nm) { if (host.dataset.rigLoading === sig) host.dataset.rigLoading = ''; if (!nm || !G || !host.isConnected) return; var cur = normAvatar(myAvatar || DEFAULT_AV); if ((isFull ? cur.full : 'gardrop:' + meSig(cur)) !== sig) return; Rig.unmountAll(host); Rig.mount(host, nm, 'on', { phase: 0.9, reduce: !!settings.reduceMotion, crop: [96, 0, 288, 288], events: { servis: function () { cayCups(); } } }); host.dataset.rigChar = sig; });
   }
   function setMeAv(a) { $('meAv').innerHTML = '<span class="avw">' + charImgHTML(a, 'bust', 'bust') + '</span>'; rigMe(); } // v9.97: portre her zaman .avw sarmalayıcısıyla (giriş skini animasyonu + rig)
   function cayCups() { [0, 1, 2, 3].forEach(function (p, i) { setTimeout(function () { if (!G) return; spawnFx('fx-cay', CUP_XY[p][0], CUP_XY[p][1], 10000); sfxOnce('cayting', 'cay:' + (i + 1), 100); }, i * 140); }); }
@@ -1160,7 +1246,7 @@
     return d;
   }
   var ME_SIG = ''; // v10.06 (K158, tester videosu "ben burada sarışınım, orada başka birisi var"): masadaki kendi (arkadan) karakterin kurulduğu görünüm
-  function meSig() { try { return JSON.stringify(normAvatar(myAvatar || DEFAULT_AV)); } catch (e) { return ''; } }
+  function meSig(av) { try { return JSON.stringify(normAvatar(av || myAvatar || DEFAULT_AV)); } catch (e) { return ''; } }
   function buildTable() {
     ME_SIG = meSig();
     var N = G.names; if (window.Rig) [0, 1, 2, 3].forEach(function (p) { var el = $(SEAT[p].ch); Rig.instances().forEach(function (i) { if (el && el.contains(i.host)) Rig.unmount(i); }); }); // eski rig örnekleri (yeniden kurulumda)
@@ -4333,7 +4419,7 @@
   }
 
   window.DonguApp = { srvHost: srvHost, NATIVE: NATIVE, $: $, overlay: overlay, screen: screen, toast: toast, guard: guard, NET: NET, ACC: ACC, api: api, accBody: accBody, accApply: accApply, charImgHTML: charImgHTML, normAvatar: normAvatar, effectiveAvatar: effectiveAvatar, gardrop: gardrop, GARDROP: GARDROP, GARDROP_VERSION: GARDROP_VERSION, avatar: function () { return normAvatar(myAvatar || DEFAULT_AV); }, matchAvatar: matchAvatar, settings: settings, saveSettings: saveSettings, showLobby: showLobby, showTables: showTables, roomOf: roomOf, roomSel: function () { return lobbySel; }, wardrobe: wardrobe, levelInfo: levelInfo, applyTheme: applyTheme, THEMES: THEMES, UI: UI, sfx: sfx, skinCount: skinCount, stopSession: stopSession, setState: function (st) { APP.state = st; }, state: function () { return APP.state; }, selfHosted: selfHosted, store: store, load: load, socReport: socReport /* v10.11 (K178) */ };
-  window.AO = { openAll: function (v) { OPEN_ALL = !!v; }, help: showHelp, app: APP, /* v10.01 test */ composeChar: composeChar, charLayers: charLayers, act: ACT, actionState: actionState, playIntroAt: playIntroAt, rigOf: rigOf, /* v10.07 test: gösteri vitrini */ useActionSkin: useActionSkin, playActionFx: playActionFx, zaferCheck: zaferCheck, soc: SOC, showFriends: showFriends, showDM: showDM, socConnect: socConnect, dmClose: dmClose, interState: interState, leaderboard: showLeaderboard, profile: showProfile, acc: ACC, peek: PEEK, skin: SKIN, endPrep: endPrep, accBoot: accBoot, tutRig: function () { return tutRig; }, tut: function () { return tutorial ? { mod: TUT_MODULES[tutorial.mod].id, step: tutorial.step, wait: curStep() && curStep().wait, text: $('coachText').textContent } : null; }, modules: TUT_MODULES, startModule: startModule, hub: showTutHub, tryLandscape: tryLandscape, sizeScene: sizeScene, rooms: ROOMS, lobby: showLobby, login: showLogin, tables: showTables, level: levelInfo, intro: showHandIntro, themes: THEMES, applyTheme: applyTheme, net: NET, peek: PEEK, requestPeek: requestPeek, slapHappened: slapHappened, startPrep: startPrep, endPrep: endPrep, skinCount: skinCount, freeLeft: freeLeft, useFreeSkin: useFreeSkin, wardrobe: function () { return wardrobe; }, tutIncoming: tutIncoming, openSkinMenu: openSkinMenu, meldDetail: showMeldDetail, sort: autoSort, insert: insertInRack, setRackRaw: function (r) { rack = r.slice(); render(); }, rack: function () { return rack.slice(); }, openSel: function () { return OPEN_SEL; }, candsOf: candsOf, layp: LAYP, humanError: humanError, render: render, sel: function () { return sel; },  state: function () { return G; }, setRack: function (ids) { rack = ids.slice(); syncRack(false); render(); }, taskSegments: taskSegments, rackSegments: rackSegments, rig: function (fn) { clearTimeout(botTimer); fn(G); syncRack(false); render(); }, tileById: tileById, CATALOG: CATALOG, showStore: showStore, showLobby: showLobby, showCreator: showCreator, effectiveAvatar: effectiveAvatar, normAvatar: normAvatar, api: api, accBody: accBody };
+  window.AO = { openAll: function (v) { OPEN_ALL = !!v; }, gardropRig: gardropRig, canGardropRig: canGardropRig, grig: GRIG, /* v10.13 test */ help: showHelp, app: APP, /* v10.01 test */ composeChar: composeChar, charLayers: charLayers, act: ACT, actionState: actionState, playIntroAt: playIntroAt, rigOf: rigOf, /* v10.07 test: gösteri vitrini */ useActionSkin: useActionSkin, playActionFx: playActionFx, zaferCheck: zaferCheck, soc: SOC, showFriends: showFriends, showDM: showDM, socConnect: socConnect, dmClose: dmClose, interState: interState, leaderboard: showLeaderboard, profile: showProfile, acc: ACC, peek: PEEK, skin: SKIN, endPrep: endPrep, accBoot: accBoot, tutRig: function () { return tutRig; }, tut: function () { return tutorial ? { mod: TUT_MODULES[tutorial.mod].id, step: tutorial.step, wait: curStep() && curStep().wait, text: $('coachText').textContent } : null; }, modules: TUT_MODULES, startModule: startModule, hub: showTutHub, tryLandscape: tryLandscape, sizeScene: sizeScene, rooms: ROOMS, lobby: showLobby, login: showLogin, tables: showTables, level: levelInfo, intro: showHandIntro, themes: THEMES, applyTheme: applyTheme, net: NET, peek: PEEK, requestPeek: requestPeek, slapHappened: slapHappened, startPrep: startPrep, endPrep: endPrep, skinCount: skinCount, freeLeft: freeLeft, useFreeSkin: useFreeSkin, wardrobe: function () { return wardrobe; }, tutIncoming: tutIncoming, openSkinMenu: openSkinMenu, meldDetail: showMeldDetail, sort: autoSort, insert: insertInRack, setRackRaw: function (r) { rack = r.slice(); render(); }, rack: function () { return rack.slice(); }, openSel: function () { return OPEN_SEL; }, candsOf: candsOf, layp: LAYP, humanError: humanError, render: render, sel: function () { return sel; },  state: function () { return G; }, setRack: function (ids) { rack = ids.slice(); syncRack(false); render(); }, taskSegments: taskSegments, rackSegments: rackSegments, rig: function (fn) { clearTimeout(botTimer); fn(G); syncRack(false); render(); }, tileById: tileById, CATALOG: CATALOG, showStore: showStore, showLobby: showLobby, showCreator: showCreator, effectiveAvatar: effectiveAvatar, normAvatar: normAvatar, api: api, accBody: accBody };
   sizeScene(); setTimeout(sizeScene, 300);
   ['app', 'stage', 'rackWrap'].forEach(function (id) { $(id).addEventListener('scroll', function () { $(id).scrollTop = 0; $(id).scrollLeft = 0; }); });
   function resettle() { sizeScene(); setTimeout(sizeScene, 120); setTimeout(function () { sizeScene(); if (G && G.phase !== 'handover') renderRack(); }, 450); } // yön değişimi / çubuk açılıp kapanması: birkaç adımda yeniden hesapla

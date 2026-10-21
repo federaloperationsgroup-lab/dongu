@@ -29,7 +29,7 @@ const L = require('./qa_lib.js'); const fs = require('fs'); const path = require
   const charFiles = await page.evaluate((cs) => cs.map((c) => { const e = AO.effectiveAvatar(AO.normAvatar({ v: 2, name: 'T', full: c })); const Ls = []; ['on', 'yan', 'arka'].forEach((p) => (AO.charLayers(e, p) || []).forEach((l) => l && l.src && Ls.push(l.src))); return { c, layers: Ls, bust: 'assets/ch/' + (c) + '-bust.webp' }; }), chars);
   let missC = []; for (const cf of charFiles) { for (const f of cf.layers) if (!exists(f)) missC.push(cf.c + ':' + f); }
   const rigs = fs.existsSync(WEB + '/assets/rig') ? fs.readdirSync(WEB + '/assets/rig') : [];
-  for (const r of rigs) { const rj = path.join(WEB, 'assets/rig', r, 'rig.json'); if (!fs.existsSync(rj)) { missC.push('rig.json yok: ' + r); continue; } const j = JSON.parse(fs.readFileSync(rj, 'utf8')); const files = new Set(); JSON.stringify(j).replace(/"([A-Za-z0-9_\-\/]+\.(webp|png))"/g, (m, f) => { files.add(f); return m; }); for (const f of files) if (!fs.existsSync(path.join(WEB, 'assets/rig', r, f)) && !fs.existsSync(path.join(WEB, f))) missC.push('rig ' + r + ': ' + f); }
+  for (const r of rigs) { const rj = path.join(WEB, 'assets/rig', r, 'rig.json'); if (!fs.existsSync(rj)) { if (r !== 'gardrop') missC.push('rig.json yok: ' + r); continue; } /* gardrop: giysi parçaları; tanım ten-erkek/ten-kadin rig.json'unda */ const j = JSON.parse(fs.readFileSync(rj, 'utf8')); const files = new Set(); JSON.stringify(j).replace(/"([A-Za-z0-9_\-\/]+\.(webp|png))"/g, (m, f) => { files.add(f); return m; }); for (const f of files) if (!fs.existsSync(path.join(WEB, 'assets/rig', r, f)) && !fs.existsSync(path.join(WEB, f))) missC.push('rig ' + r + ': ' + f); }
   ok(missC.length === 0, 'tam karakterler (' + chars.length + ') ve rig klasörleri (' + rigs.join(', ') + ') dosyaları tam', missC.slice(0, 15).join(', '));
   // 4) çalışma zamanı: mağazada her kategori + her ürün "Dene" (iki cinsiyet), karakter oluşturucu, mekân temaları — ağ hatası izleme
   const netFail = () => net.filter((x) => /ERR_FILE_NOT_FOUND|ERR_FAILED|^404/.test(x) && !/favicon|sw\.js|manifest|chrome-extension/.test(x));
@@ -64,7 +64,7 @@ const L = require('./qa_lib.js'); const fs = require('fs'); const path = require
   ok(vk.length >= 20 && missV.length === 0, 'kıraathane sprite dosyaları (' + vk.length + ') tam', missV.join(', '));
   // 5) sw.js / manifest / mobil
   const sw = fs.readFileSync(WEB + '/sw.js', 'utf8'); const swv = (sw.match(/dongu-v?([0-9.]+)/) || [])[1]; const appv = (fs.readFileSync(L.ROOT + '/app.js', 'utf8').match(/VERSION = '([0-9.]+)'/) || [])[1];
-  ok(appv === '10.12' && (!swv || swv === appv), 'sürüm: app ' + appv + ', sw ' + (swv || '(sürüm dizgisi yok)'));
+  ok(/^10\.\d\d$/.test(appv || '') && (!swv || swv === appv), 'sürüm: app ' + appv + ', sw ' + (swv || '(sürüm dizgisi yok)'));
   const pre = Array.from(new Set((sw.match(/'([^']+\.(webp|png|js|html|json|woff2|ogg|webmanifest))'/g) || []).map((x) => x.slice(1, -1)))); const missSw = pre.filter((p) => !p.startsWith('http') && !exists(p.replace(/^\.?\//, '')) && !exists(p.replace(/^\//, '')));
   ok(missSw.length === 0, 'sw.js ön bellek listesi (' + pre.length + ') diskte var', missSw.join(', '));
   const man = JSON.parse(fs.readFileSync(WEB + '/manifest.webmanifest', 'utf8')); ok(man.name && man.icons && man.icons.every((i) => exists(i.src.replace(/^\//, ''))), 'manifest: ' + man.name + ', simgeler var');

@@ -13,6 +13,9 @@ var Rig = (function () {
     return LOADING[char];
   }
   function has(char) { return !!DEFS[char]; }
+  function srcOf(char, file) { return (/^(data:|blob:|https?:|\/)/.test(file) || file.indexOf('/') >= 0) ? file : 'assets/rig/' + char + '/' + file; } // v10.13 (08-C): oyuncunun kendi karakteri çalışma anında üretilen parçalarla (blob) kurulur
+  function register(char, def) { DEFS[char] = def; return def; } // v10.13: sentetik rig tanımı (gardırop)
+  function unregister(char) { var d = DEFS[char]; if (!d) return; delete DEFS[char]; delete LOADING[char]; if (d._urls) d._urls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (e) {} }); }
   function preload(src) { if (PRE[src]) return PRE[src]; PRE[src] = new Promise(function (res) { var im = new Image(); im.onload = function () { res(im); }; im.onerror = function () { res(null); }; im.src = src; }); return PRE[src]; }
   // ---- matrisler [a,b,c,d,e,f] (CSS matrix) ----
   function mul(m, n) { return [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]]; }
@@ -33,15 +36,15 @@ var Rig = (function () {
     var layers = []; // v10.07: parça ve prop görselleri tek z sırasında (prop z'si yoksa en üstte — Fikret'in tepsisi gibi)
     parts.forEach(function (p) {
       var img = document.createElement('img'); img.className = 'rigpart'; img.alt = ''; img.draggable = false; img.style.cssText = __L("position:absolute;left:0;top:0;width:{0}px;height:{1}px;transform-origin:0 0;will-change:transform", [(CS), (CS)]);
-      img.src = base + p.dosya; layers.push({ z: p.z || 0, img: img }); preload(base + p.dosya);
-      var vr = {}; Object.keys(p.varyant || {}).forEach(function (k) { vr[k] = base + p.varyant[k]; preload(vr[k]); });
+      img.src = srcOf(char, p.dosya); layers.push({ z: p.z || 0, img: img }); preload(srcOf(char, p.dosya));
+      var vr = {}; Object.keys(p.varyant || {}).forEach(function (k) { vr[k] = srcOf(char, p.varyant[k]); preload(vr[k]); });
       inst.bones[p.ad] = { def: p, img: img, pivot: p.pivot || [CS / 2, CS / 2], parent: p.ebeveyn || null, variants: vr, variant: null, world: ID.slice() };
       inst.pose[p.ad] = { rot: 0, dx: 0, dy: 0, sc: 1 };
     });
     // ebeveynler önce (topolojik sıra)
     var done = {}, order = []; function visit(n) { if (done[n]) return; var b = inst.bones[n]; if (!b) return; if (b.parent) visit(b.parent); done[n] = 1; order.push(n); }
     Object.keys(inst.bones).forEach(visit); inst.order = order;
-    (V.proplar || []).forEach(function (pr) { var bw = pr.boyut ? pr.boyut[0] : CS, bh = pr.boyut ? pr.boyut[1] : CS; var img = document.createElement('img'); img.className = 'rigprop'; img.alt = ''; img.draggable = false; img.hidden = true; img.style.cssText = __L("position:absolute;left:0;top:0;width:{0}px;height:{1}px;transform-origin:0 0;will-change:transform", [(bw), (bh)]); img.src = base + pr.dosya; layers.push({ z: pr.z != null ? pr.z : 1000, img: img }); preload(base + pr.dosya); inst.props[pr.ad] = { def: pr, img: img, bone: null, auto: !!(def.varsayilan_prop_gorunur && pr.gorunur !== false && pr.ebeveyn) }; }); // v9.97: prop kendi boyutunda (bardak 64×64); tutma noktası ele hizalanır (compute) · v10.07: varsayılan görünür prop (mühür, örgü, yumak, bıçak) kendi kemiğinde durur
+    (V.proplar || []).forEach(function (pr) { var bw = pr.boyut ? pr.boyut[0] : CS, bh = pr.boyut ? pr.boyut[1] : CS; var img = document.createElement('img'); img.className = 'rigprop'; img.alt = ''; img.draggable = false; img.hidden = true; img.style.cssText = __L("position:absolute;left:0;top:0;width:{0}px;height:{1}px;transform-origin:0 0;will-change:transform", [(bw), (bh)]); img.src = srcOf(char, pr.dosya); layers.push({ z: pr.z != null ? pr.z : 1000, img: img }); preload(srcOf(char, pr.dosya)); inst.props[pr.ad] = { def: pr, img: img, bone: null, auto: !!(def.varsayilan_prop_gorunur && pr.gorunur !== false && pr.ebeveyn) }; }); // v9.97: prop kendi boyutunda (bardak 64×64); tutma noktası ele hizalanır (compute) · v10.07: varsayılan görünür prop (mühür, örgü, yumak, bıçak) kendi kemiğinde durur
     layers.sort(function (a, b) { return a.z - b.z; }).forEach(function (l) { root.appendChild(l.img); });
     restoreProps(inst);
     fit(inst); INST.push(inst); tick(0, inst); loop(); return inst;
@@ -50,7 +53,7 @@ var Rig = (function () {
   function unmount(inst) { if (!inst) return; var i = INST.indexOf(inst); if (i >= 0) INST.splice(i, 1); if (inst.root && inst.root.parentNode) inst.root.parentNode.removeChild(inst.root); inst.host.classList.remove('rig'); }
   function unmountAll(host) { INST.filter(function (x) { return x.host === host; }).forEach(unmount); }
   // ---- varyant (yüz / el pozu) ----
-  function setVariant(inst, bone, name) { var b = inst.bones[boneName(inst, bone)]; if (!b) return; if (Array.isArray(name)) { var pick = null; for (var i = 0; i < name.length; i++) if (b.variants[name[i]]) { pick = name[i]; break; } name = pick; } var src = name && b.variants[name] ? b.variants[name] : ('assets/rig/' + inst.char + '/' + b.def.dosya); if (b.variant === (name || null)) return; b.variant = name || null; b.img.src = src; syncProps(inst); }
+  function setVariant(inst, bone, name) { var b = inst.bones[boneName(inst, bone)]; if (!b) return; if (Array.isArray(name)) { var pick = null; for (var i = 0; i < name.length; i++) if (b.variants[name[i]]) { pick = name[i]; break; } name = pick; } var src = name && b.variants[name] ? b.variants[name] : srcOf(inst.char, b.def.dosya); if (b.variant === (name || null)) return; b.variant = name || null; b.img.src = src; syncProps(inst); }
   // v10.07: varsayılan proplar — eldeki prop yalnız uygun el pozunda görünür (taş tutan / açık el bıçağı, örgüyü bırakır; Muhtar'ın mührü dinlenme ve "vur" elinde)
   function propAllowed(inst, pr) { var b = pr.bone && inst.bones[pr.bone]; if (!b) return false; if (!b.variant) return true; var ok = (pr.def.el_varyantlari || [pr.def.el_varyanti || 'dinlen']); return !pr.def.el_varyanti && !pr.def.el_varyantlari ? true : ok.indexOf(b.variant) >= 0; }
   function syncProps(inst) { Object.keys(inst.props || {}).forEach(function (k) { var pr = inst.props[k]; if (pr.auto && pr.bone) pr.img.hidden = !propAllowed(inst, pr) || !!(inst.clip && inst.clip.hideProps && inst.clip.hideProps[k]); }); }
@@ -154,6 +157,6 @@ var Rig = (function () {
   (function () { var c = CLIPS.cay_servisi, k = {}; Object.keys(c.kemik).forEach(function (n) { if (n.indexOf('-sag') < 0) k[n] = c.kemik[n]; }); c.yan = { kemik: k, olay: c.olay.filter(function (ev) { return ev.kemik !== 'el-sag'; }) }; })(); // yan: arka kol (sag→arka) gövdenin arkasında; sunum eli görünmez, o yüzden yalnız tepsi kolu + baş
   function refit() { INST.forEach(fit); }
   if (typeof window !== 'undefined') window.addEventListener('resize', refit);
-  return { hooks: HOOKS, load: fetchDef, has: has, hasVariant: hasVariant, mount: mount, unmount: unmount, unmountAll: unmountAll, play: play, stop: stop, attach: attach, detach: detach, setVariant: setVariant, point: point, CLIPS: CLIPS, instances: function () { return INST.slice(); }, _m: { mul: mul, local: local, apply: apply, sample: sample, boneName: boneName } };
+  return { hooks: HOOKS, load: fetchDef, has: has, register: register, unregister: unregister, hasVariant: hasVariant, mount: mount, unmount: unmount, unmountAll: unmountAll, play: play, stop: stop, attach: attach, detach: detach, setVariant: setVariant, point: point, CLIPS: CLIPS, instances: function () { return INST.slice(); }, _m: { mul: mul, local: local, apply: apply, sample: sample, boneName: boneName } };
 })();
 
