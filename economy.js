@@ -1,3 +1,4 @@
+
 /* Döngü — ekonomi modülü (saf fonksiyonlar). Hem sunucuda (yetkili) hem istemcide (gösterim / deneme modu) çalışır.
    Bütün sayılar sürümlü CONFIG'dedir; oyun kuralları (engine.js) ile ilgisi yoktur. Para birimi: Altın (tam sayı). */
 (function (root, factory) {
@@ -491,3 +492,4 @@
 
   return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps, arenaName: arenaName, arenaRule: arenaRule, arenaProgress: arenaProgress, arenaOpen: arenaOpen, syncArenas: syncArenas, itemLevel: itemLevel, charOf: charOf, isActionSkin: isActionSkin, actionSkin: actionSkin, skinUseItem: skinUseItem, charGrants: charGrants, bakCharges: bakCharges, seasonKey: seasonKey, seasonLabel: seasonLabel, seasonEndsAt: seasonEndsAt, prevSeasonKey: prevSeasonKey, leagueOf: leagueOf, leaguePoints: leaguePoints, leagueBase: leagueBase, leagueDelta: leagueDelta, settleLeague: settleLeague, leagueSummary: leagueSummary };
 }));
+
