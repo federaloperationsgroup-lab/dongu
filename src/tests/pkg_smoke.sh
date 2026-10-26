@@ -1,7 +1,7 @@
 #!/bin/sh
 # Paketten temiz kurulum denemesi: pkg/ boş klasöre kopyalanır, sunucu oradan açılır (Render'daki gibi zip'ler açılır), /durum ve dosyalar denetlenir.
 # Kullanım: sh tests/pkg_smoke.sh v10.12
-T=/tmp/pkgsmoke; PORT=8779; WANT=${1:-v10.12}; OK=/home/claude/okey
+T=/tmp/pkgsmoke; PORT=8779; WANT=${1:-v$(grep -o "VERSION = '[0-9.]*'" /home/claude/okey/app.js | grep -o "[0-9.]*")}; OK=/home/claude/okey
 rm -rf $T && mkdir -p $T && cp $OK/pkg/* $T/ && ln -s $OK/server/node_modules $T/node_modules
 cd $T && (PORT=$PORT ADMIN_KEY=k_smoke_1 NODE_PATH=/opt/npm-tools/node_modules setsid nohup node ./server.js pkgsmoke > $T/srv.log 2>&1 &)
 i=0; until curl -s --noproxy '*' http://127.0.0.1:$PORT/durum > $T/durum.txt 2>/dev/null && [ -s $T/durum.txt ]; do i=$((i+1)); [ $i -gt 120 ] && break; sleep 0.25; done

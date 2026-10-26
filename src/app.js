@@ -6,7 +6,7 @@
   if (window.DonguI18n && DonguI18n.en && window.Okey && Okey.COLORS) Okey.COLORS.splice(0, 4, 'Fire', 'Star', 'Water', 'Sun');
   var SC = 1; // sahne ölçeği (1600×900 -> ekran)
   var ME = 0;
-  var VERSION = '10.13';
+  var VERSION = '10.14';
   var INVITE_ON = true; // v10.10 (K177): masa daveti / "Bu grupla yeniden" / arkadaşla "Oyna" — sunucu desteğiyle birlikte açılır
   // v10.02 (K139): mağaza uygulaması (Capacitor, Android + iOS) — sayfa paketten (capacitor://localhost / https://localhost) açılır, sunucu sabit dongu.app
   var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -590,7 +590,7 @@
       return Promise.all(keys.map(function (k) { return need[k]; })).then(function (ims) {
         var im = {}; keys.forEach(function (k, i) { im[k] = ims[i]; });
         if (!im.govde || !im.bas || !im['giysi:govde']) return null;
-        var parts = [], out = {};
+        var parts = [], out = {}, extra = [];
         var tint = function (i2) { return tintCanvas(i2, 'skin', a.skin, i2); };
         // gövde: beyaz içlik yalnız giysinin örtmediği yerde (08-C notu: nötr birleşik giysi alfasının tersi), altında pantolon, üstünde giysi gövdesi
         var gc = document.createElement('canvas'); gc.width = CS; gc.height = CS; var gx = gc.getContext('2d'); gx.drawImage(im.govde, 0, 0, CS, CS);
@@ -602,6 +602,11 @@
         jobs.push(toBlobUrl(tint(im.bas), urls).then(function (u) { out.bas = u; }));
         Object.keys(bones.bas.varyant || {}).forEach(function (k) { if (im['bas:' + k]) jobs.push(toBlobUrl(tint(im['bas:' + k]), urls).then(function (u) { out['bas:' + k] = u; })); });
         handNames.forEach(function (h) { if (im[h]) jobs.push(toBlobUrl(tint(im[h]), urls).then(function (u) { out[h] = u; })); Object.keys(bones[h].varyant || {}).forEach(function (k) { if (im[h + ':' + k]) jobs.push(toBlobUrl(tint(im[h + ':' + k]), urls).then(function (u) { out[h + ':' + k] = u; })); }); });
+        // el astarı (08-C notu): tut/açık el pozları manşet altını dinlenme eli kadar örtmez → dinlenme elinin manşet kenarını saran şeridi (giysi ön kol alfası 8 px genişletilmiş) elin ve manşetin altına konur
+        handNames.forEach(function (h) { var hb = bones[h]; if (!im[h] || !hb.varyant || Object.keys(hb.varyant).length < 2) return; var fore = hb.ebeveyn, gi = im['giysi:' + fore]; if (!gi) return;
+          var mc = document.createElement('canvas'); mc.width = CS; mc.height = CS; var mx = mc.getContext('2d'); for (var dx = -8; dx <= 8; dx += 4) for (var dy = -8; dy <= 8; dy += 4) mx.drawImage(gi, dx, dy, CS, CS);
+          var lc = tint(im[h]); var lx = lc.getContext('2d'); lx.globalCompositeOperation = 'destination-in'; lx.drawImage(mc, 0, 0); lx.globalCompositeOperation = 'source-over';
+          jobs.push(toBlobUrl(lc, urls).then(function (u) { extra.push({ ad: h + '-astar', pivot: hb.pivot, ebeveyn: h, dosya: u, z: Math.min(hb.z, bones[fore].z) - 0.5, boyut: [CS, CS] }); })); });
         // statik katmanlar → kemik grupları
         var groups = { basArka: [], basOn: [], basMakyaj: [], govdeUst: [] }, wristL = [];
         layers.forEach(function (l, i) { var ii = im['lay:' + i]; if (!ii) return; var e = { im: ii, l: l };
@@ -611,7 +616,6 @@
           else if (l.slot === 'wrist') wristL.push(e);
           else if (l.slot !== 'pants') groups.basOn.push(e); });
         var bake = function (list) { var c = document.createElement('canvas'); c.width = CS; c.height = CS; var x = c.getContext('2d'); list.forEach(function (e) { if (e.l.kind === 'hair') x.drawImage(tintCanvas(e.im, 'hair', e.l.color, null), 0, 0); else x.drawImage(e.im, 0, 0, CS, CS); }); return c; };
-        var extra = [];
         var addStatic = function (nm, list, parent, z) { if (!list.length) return; var c = bake(list); jobs.push(toBlobUrl(c, urls).then(function (u) { extra.push({ ad: nm, pivot: bones[parent].pivot, ebeveyn: parent, dosya: u, z: z, boyut: [CS, CS] }); })); };
         addStatic('sac-arka', groups.basArka, 'bas', -1); addStatic('makyaj', groups.basMakyaj, 'bas', bones.bas.z + 0.1); addStatic('bas-ust', groups.basOn, 'bas', 20); addStatic('govde-ust', groups.govdeUst, 'govde', 15);
         if (wristL.length) { // bilek: hangi ön kol / elle örtüşüyorsa ona bağlanır (en üstte çizilir)
