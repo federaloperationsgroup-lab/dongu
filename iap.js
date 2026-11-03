@@ -7,16 +7,15 @@
 'use strict';
 var fs = require('fs'), path = require('path'), https = require('https'), http = require('http');
 
-var ALL_CHARS = ['c_fikret', 'c_sakir', 'c_pamuk', 'c_nine', 'c_muhtar', 'c_ordek', 'c_palyaco'];
+
 var PRODUCTS = {
   altin_kucuk: { name: 'Küçük Kese', gold: 5000, priceHint: '49,99 TL', kind: 'gold', desc: '5.000 altın' },
   altin_orta: { name: 'Orta Kese', gold: 16500, priceHint: '129,99 TL', kind: 'gold', desc: '15.000 + 1.500 bonus altın' },
   altin_buyuk: { name: 'Büyük Kese', gold: 48000, priceHint: '299,99 TL', kind: 'gold', desc: '40.000 + 8.000 bonus altın' },
   altin_dev: { name: 'Dev Kese', gold: 130000, priceHint: '649,99 TL', kind: 'gold', desc: '100.000 + 30.000 bonus altın' },
-  baslangic: { name: 'Başlangıç Paketi', gold: 3000, items: ['c_fikret'], once: true, priceHint: '29,99 TL', kind: 'pack', desc: '3.000 altın + Çaycı Fikret (hesap başına bir kez)' },
-  karakter_hepsi: { name: 'Karakter Koleksiyonu', items: ALL_CHARS, once: true, priceHint: '199,99 TL', kind: 'pack', desc: '7 özel karakter (Fikret, Şakir, Pamuk, Nine, Muhtar, Ördek, Palyaço)' }
-};
-var ORDER = ['baslangic', 'altin_kucuk', 'altin_orta', 'altin_buyuk', 'altin_dev', 'karakter_hepsi'];
+  baslangic: { name: 'Başlangıç Paketi', gold: 3000, items: ['c_fikret'], once: true, priceHint: '29,99 TL', kind: 'pack', desc: '3.000 altın + Çaycı Fikret (hesap başına bir kez)' }
+}; // v10.15 (3 Kasım 2026, kullanıcı kararı): Karakter Koleksiyonu paketi kaldırıldı; karakterler yalnız oyun içi altınla
+var ORDER = ['baslangic', 'altin_kucuk', 'altin_orta', 'altin_buyuk', 'altin_dev'];
 var SECRET = process.env.RC_SECRET_KEY || '', WEBHOOK = process.env.RC_WEBHOOK_SECRET || '', API = process.env.RC_API_BASE || 'https://api.revenuecat.com', SANDBOX_OK = !!process.env.IAP_SANDBOX_OK;
 var DB = null, Accounts = null, DATA = path.join(__dirname, 'data'), mem = [], byTx = {};
 
