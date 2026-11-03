@@ -7,7 +7,7 @@ const PORT = 8768, KEY = 'test-anahtar-68', LOG = '/tmp/qa_server_econ.srv.log';
 (async () => {
   let pass = 0, fail = 0; const ok = (c, n, x) => { c ? pass++ : fail++; console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? ' :: ' + String(x).slice(0, 400) : '')); };
   const srv = S.start(PORT, { ADMIN_KEY: KEY, QUICK_WAIT: '1500', PREP_MS: '1500', PREP_FIRST_MS: '1500', BOT_DELAY: '60', NEXT_DELAY: '500', RESULT_GAP_MS: '300', TURN_MS: '400', PAID_WAIT: '1500', REMATCH_WAIT: '4000' }, LOG); await S.up(PORT, LOG, true);
-  const durum = (await S.get(PORT, '/durum')).body; ok(/Sürüm: v10\.12/.test(durum) && /Hesap deposu/.test(durum), '/durum v10.12', durum.slice(0, 120));
+  const durum = (await S.get(PORT, '/durum')).body; ok(/Sürüm: v10\.\d\d\./.test(durum) && /Hesap deposu/.test(durum), '/durum sürüm satırı', durum.slice(0, 120));
   const me = async (acc) => { const j = (await S.post(PORT, '/api/me', { id: acc.id, token: acc.token })).json; return { player: j && j.player ? j.player : j }; };
   // hesaplar
   const A = await S.guest(PORT, 'Zengin'), B = await S.guest(PORT, 'Fakir'), C = await S.guest(PORT, 'Cimri');

@@ -6,7 +6,7 @@
   if (window.DonguI18n && DonguI18n.en && window.Okey && Okey.COLORS) Okey.COLORS.splice(0, 4, 'Fire', 'Star', 'Water', 'Sun');
   var SC = 1; // sahne ölçeği (1600×900 -> ekran)
   var ME = 0;
-  var VERSION = '10.14';
+  var VERSION = '10.15';
   var INVITE_ON = true; // v10.10 (K177): masa daveti / "Bu grupla yeniden" / arkadaşla "Oyna" — sunucu desteğiyle birlikte açılır
   // v10.02 (K139): mağaza uygulaması (Capacitor, Android + iOS) — sayfa paketten (capacitor://localhost / https://localhost) açılır, sunucu sabit dongu.app
   var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
