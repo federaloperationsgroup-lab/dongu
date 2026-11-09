@@ -22,9 +22,10 @@ const S = require('./qa_srv.js'); const PORT = 8776, KEY = 'test-anahtar-76', LO
   let n = q.msgs.length; q.send({ t: 'peek', target: 1 }); const pk = await q.wait((m) => m.t === 'peek' || m.t === 'error', 3000);
   ok(pk && pk.t === 'peek' && pk.hand === null && pk.revealIn === 600 && pk.charges === 4, 'lig maçında bakış kabul (K173): ilk cevapta taş yok (0,6 sn), hak 5 → 4', JSON.stringify(pk && { t: pk.t, msg: pk.msg, revealIn: pk.revealIn, charges: pk.charges }));
   const ph = await q.wait((m) => m.t === 'peekHand', 3000); ok(ph && ph.hand && ph.hand.length >= 14 && ph._at - pk._at >= 550, 'taşlar ' + (ph ? ph._at - pk._at : '?') + ' ms sonra geldi');
-  await q.wait((m) => m.t === 'peekEnd', 12000); await S.sleep(200);
+  const pe = await q.wait((m) => m.t === 'peekEnd', 12000); await S.sleep(200);
   n = q.msgs.length; q.send({ t: 'peek', target: 1 }); await S.sleep(400); let er = q.errorsSince(n);
-  ok(er.some((x) => /zaten baktın/.test(x)), 'aynı rakibe ikinci bakış reddedildi (P1)', er.join('|'));
+  if (pe && pe.reason === 'slap') ok(!er.some((x) => /zaten baktın/.test(x)), 'bot tokatladı: kesilen bakış aynı rakibe yinelenebilir (K172 istisnası)', er.join('|')); // v10.17: gizli bot rastgele tokatlayabilir; test eskiden burada yanlış FAIL veriyordu
+  else ok(er.some((x) => /zaten baktın/.test(x)), 'aynı rakibe ikinci bakış reddedildi (P1)', er.join('|') + ' (bitiş: ' + (pe && pe.reason) + ')');
   q.send({ t: 'leave' }); await S.sleep(300); q.close();
   // 2) arkadaş odası: A kurar, B (skinler kapalı) ve C (yeni oyuncu) katılır, 1 bot ile başlar
   const a = S.client(PORT, A, 'Bakan'), b = S.client(PORT, B, 'Hedef'), c = S.client(PORT, C, 'Yeni'); await a.open; await b.open; await c.open;

@@ -1,0 +1,69 @@
+DÖNGÜ — ÜRETİM 10: SKİN HAREKETLERİ İÇİN YENİ YÜZ VE EL ÇİZİMLERİ
+(B) oyuncunun kendi karakteri (ten-erkek, ten-kadin) · (C) yedi hazır karakter
+
+Her karakteri bitirince AYRI zip ver: Dongu_Uretim_10_<karakter>.zip (örn. Dongu_Uretim_10_ten-erkek.zip). Sonra sıradakine geç.
+Sıra: 1) ten-erkek 2) ten-kadin 3) fikret 4) sakir 5) pamuk 6) nine 7) muhtar 8) ordek 9) palyaco
+
+NEDEN
+Masadaki karakterler parçalı: baş, üst kol, ön kol ve el ayrı katman. Oyun bu parçaları eklemlerinden döndürür ve doğru anda yüz/el çizimini değiştirir; skin hareketleri böyle oynar (Tersten El, İnce Ayar, Gösterişsiz Numara, Ortayı Kokla, Çaktırmadan Bak, Tokat, Zafer…).
+Test oyuncularına göre hareketler bir resim kayıyormuş gibi görünüyor ve ne olduğu anlaşılmıyordu. Oyun tarafı düzeltildi (bütün resmi kaydıran hareketler kalktı, botlar da parçalı oldu). Kalan iki eksik çizim işi:
+1. Yan görünümde (sol ve sağ koltuk) hareketi yapan el tek pozlu: el şekil değiştirmiyor.
+2. Bakma, tokat yeme, tokat atma, koklama, şıklatma, parmakla dokunma anları için yüz ve el çizimi yok.
+Yeni her çizim, hareketin NE olduğunu tek başına göstermeli.
+
+REFERANS (bu metnin yanındaki Dongu_Uretim_10_Referans.zip)
+- <karakter>/: kabul edilmiş 9 rig'in bütün parçaları (PNG), rig.json, birlesik-on.png ve birlesik-yan.png (varsayılan poz), mevcut-varyantlar-on.png ve mevcut-varyantlar-yan.png (bugünkü yüz ve el çizimleri karakterin üstünde).
+
+ORTAK KURALLAR
+- Tuval 480×480, saydam PNG (RGBA). Parça KENDİ YERİNDE: kırpılmaz, ortalanmaz, ölçeklenmez.
+- Mevcut parçalar DEĞİŞMEZ; yalnız yeni yüzler ve eller eklenir.
+- Çizim tarzı, renk, ışık (sol üstten), oran ve çizgi kalınlığı mevcut karakterlerle birebir aynı.
+- Okunurluk: telefonda masadaki karakter yaklaşık 100 px boyunda görünür (baş ~40 px, el ~30 px). Her yeni yüz ve el o boyda ilk bakışta anlaşılmalı: siluet net, parmaklar belirgin, ifade abartılı ama karakterin kendisi.
+- Yüz varyantı: yalnız yüz (göz, kaş, ağız, yanak) değişir. Kafa dış çizgisi, kulaklar, saç, başlık, gözlük, küpe ve hiza AYNI. Yeni yüz mevcut "bas" dosyasının üstüne konunca yüz dışında hiçbir piksel değişmemeli.
+- El varyantı: bilek pivotu rig.json'daki el pivotuyla AYNI yerde. El bilekten başlar ve manşetin altına mevcut dinlen eli kadar fazladan uzar; kol ve manşet çizilmez. El tek başına ve tam çizilir: taş, eşya ya da öteki el yok.
+- Dosya adları aynen: <karakter>-<gorunum>-<parca>.png (örn. ten-erkek-on-bas-kizgin.png, ten-erkek-yan-el-on-isaret.png). Adları değiştirme. Yapamadığın dosyayı söyle, uydurma.
+
+YENİ YÜZLER (her karakterde; zaten olanı yeniden çizme)
+- bas-kacamak-sol ve bas-kacamak-sag (yalnız on görünümde), bas-kacamak (yan görünümde) — "Çaktırmadan Bak":
+  göz ucuyla sinsi bakış. Gözbebekleri göz kenarında (on: izleyicinin soluna / sağına; yan: baktığı yöne, öne), göz kapakları yarı inik, bir kaş hafif kalkık, ağızda bastırılmış kurnaz gülümseme.
+- bas-sersem — "Tokat yedi": gözler yarı kapalı ve farklı yönlere kaymış, ağız çarpık ve aralık, bir yanakta pembe-kırmızı tokat izi.
+- bas-kizgin — "Yakaladım!" (bakanı yakalayıp tokat atan): kaşlar sert çatık, gözler kısık, dişler sıkılı ya da ağız "hey!" der gibi açık, yanaklar hafif kızarık.
+- bas-kokla — "Ortayı Kokla": gözler kapalı, burun hafif havada, burun delikleri belirgin, ağız memnun. Koklama çizgisi çizme (oyun efekt ekler).
+
+YENİ ELLER
+- on görünüm, hareketi yapan el = el-sag: el-sag-isaret, el-sag-sik, el-sag-tokat.
+- yan görünüm, hareketi yapan el = kameraya yakın el (el-on): el-on-tut, el-on-acik, el-on-isaret, el-on-sik, el-on-tokat.
+Pozlar:
+- tut: başparmak ve işaret parmağı bir okey taşını kıstırır gibi; taş çizilmez. Taşın duracağı nokta rig.json'da tutma noktası.
+- acik: avuç yukarı-öne açık, "buyrun / selam".
+- isaret: işaret parmağı dümdüz uzanmış, öteki parmaklar kapalı; parmak ucu masaya bakar (on: aşağı-öne, yan: öne-aşağı). "İnce Ayar" dokunuşu. Tutma noktası = parmak ucu.
+- sik: parmak şıklatma anı: orta parmak avuca inmiş, başparmak ile işaret parmağı ayrık. "Gösterişsiz Numara". Tutma noktası = başparmak ile orta parmağın buluştuğu yer.
+- tokat: açık avuç, parmaklar bitişik ve düz, avuç içi yana dönük (on: izleyicinin soluna; yan: öne, masaya doğru). Hız çizgisi çizme. Tutma noktası = avuç ortası.
+
+BÖLÜM B — OYUNCUNUN KENDİ KARAKTERİ: ten-erkek, ten-kadin (sıra 1–2)
+Oyuncuların kendi kurduğu karakterler ve botlar (Ali, Ayşe, Mehmet) bu iki gövdeyi kullanır; en çok görülen çizimler bunlar.
+- Baş kel ve yalnız ten. Oyun saçı, sakalı, bıyığı, gözlüğü ve şapkayı ayrı katman olarak başın üstüne koyar; bu yüzden kafa dış çizgisi ve kulaklar mevcut "bas" ile piksel piksel aynı kalır, yalnız yüz değişir. Kaşlar mevcut kaş rengiyle.
+- Ten ve eller mevcut parçalardaki AYNI temel ten rengiyle (oyun teni oyuncunun seçtiği renge boyar). Eller çıplak: eldiven, yüzük, saat yok.
+- Teslim (her biri) 17 PNG:
+  yüz on: bas-kacamak-sol, bas-kacamak-sag, bas-sersem, bas-kizgin, bas-kokla
+  yüz yan: bas-kacamak, bas-sersem, bas-kizgin, bas-kokla
+  el on: el-sag-isaret, el-sag-sik, el-sag-tokat
+  el yan: el-on-tut, el-on-acik, el-on-isaret, el-on-sik, el-on-tokat
+  + güncel rig.json (yeni dosyalar ilgili parçanın varyant sözlüğünde, tutma noktaları varyant_tutma'da; el-on için varyant sözlüğü yeni) + kontrol.txt.
+
+BÖLÜM C — HAZIR KARAKTERLER: fikret, sakir, pamuk, nine, muhtar, ordek, palyaco (sıra 3–9)
+- B ile aynı dosyalar ve kurallar; karakterin kendi kostümü, eldiveni ya da patisiyle. Zaten olanı çizme.
+- fikret: on görünümde el-sag-acik yok, onu da çiz (18 PNG).
+- ordek: bas-kokla (on ve yan) zaten var (15 PNG). Sağ el bıçak tutar (on: el-sag, yan: el-arka); yeni eller bıçaksız.
+- palyaco: el-sag-sik (on) zaten var (16 PNG).
+- pamuk: eller pati eldiveni. isaret = tek pati ucu öne uzanmış, yastıklar görünür; sik = patiyle "tık" (pati havada, yastıklar öne); tokat = açık pati tokadı (yastıklar öne).
+- muhtar: yan görünümde mühür kameraya yakın eldedir (el-on); yeni el-on elleri mühürsüz (oyun bu pozlarda mührü kaldırır).
+- nine: gözlük ve başörtüsü başta, bütün yüzlerde aynen. Örgü şişleri elde çizilmez (ayrı prop).
+- Teslim: karakter başına 17 PNG (fikret 18, ordek 15, palyaco 16) + güncel rig.json + kontrol.txt.
+
+KONTROL.TXT (her zip'te)
+- Dosya listesi: ad, 480×480, RGBA.
+- Yüzler: mevcut bas ile karşılaştırma; yüz bölgesi dışında değişen piksel sayısı (0 olmalı).
+- Eller: bilek pivotu (x, y) ve rig.json'daki el pivotu aynı mı; tutma noktaları.
+- Dönüş denemesi: yeni eller bilekten ±35°, yeni yüzler boyundan ±10° döndürüldü; manşet ya da yakayla arada boşluk ya da sızma yok.
+- Yapamadığın ya da emin olmadığın her şey.

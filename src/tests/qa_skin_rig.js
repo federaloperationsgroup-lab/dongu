@@ -36,9 +36,10 @@ async function enter(page, settings) {
     }
     // 2) bakış
     await page.evaluate(() => { AO.peekAnim(2, 3, true); AO.peekAnim(1, 0, true); AO.peekAnim(0, 1, true); }); await page.waitForTimeout(1100);
-    const pk = await page.evaluate(() => { const r = {}; [['top', 'chTop'], ['right', 'chRight'], ['meBack', 'chMe']].forEach(([k, id]) => { const w = document.querySelector('#' + id + ' .avw'); r[k] = getComputedStyle(w).animationName; }); const ins = (sel) => Rig.instances().find((i) => document.querySelector(sel).contains(i.host)); const top = ins('#chTop'), right = ins('#chRight'), me = ins('#meAv'); r.topBak = !!(top.clip && top.clip.def.bak); r.topHead = Math.round(top.pose.bas.rot); r.topBody = Math.round(top.pose.govde.rot); r.rightHeadDx = Math.round(right.pose.bas.dx); r.meBak = !!(me && me.clip && me.clip.def.bak); r.meHead = me ? Math.round(me.pose.bas.rot) : null; return r; });
+    const pk = await page.evaluate(() => { const r = {}; [['top', 'chTop'], ['right', 'chRight'], ['meBack', 'chMe']].forEach(([k, id]) => { const w = document.querySelector('#' + id + ' .avw'); r[k] = getComputedStyle(w).animationName; }); const ins = (sel) => Rig.instances().find((i) => document.querySelector(sel).contains(i.host)); const top = ins('#chTop'), right = ins('#chRight'), me = ins('#meAv'); r.topBak = !!(top.clip && top.clip.def.bak); r.topHead = Math.round(top.pose.bas.rot); r.topBody = Math.round(top.pose.govde.rot); r.rightHeadDx = Math.round(right.pose.bas.dx); r.meBak = !!(me && me.clip && me.clip.def.bak); r.meHead = me ? Math.round(me.pose.bas.rot) : null; r.topFace = top.bones.bas.variant; r.rightFace = right.bones.bas.variant; r.meFace = me ? me.bones.bas.variant : null; return r; });
     ok(pk.top === 'none' && pk.right === 'none' && pk.meBack === 'none', V.n + ': bakışta bütün resim kaymıyor (koltuk ve arka görünüm .avw animasyonu yok)', JSON.stringify(pk));
     ok(pk.topBak && pk.topHead < -4 && pk.topBody < -2 && pk.rightHeadDx < -5 && pk.meBak && pk.meHead > 4, V.n + ': baş ve gövde hedefe döndü (üst → sol: sola; sağ → ben: öne; ben → sağ: sağa)', JSON.stringify(pk));
+    ok(pk.topFace === 'kacamak-sol' && pk.rightFace === 'kacamak' && pk.meFace === 'kacamak-sag', V.n + ': üretim 10 — bakışta kaçamak yüz (ön: yöne göre sol/sağ, yan: tek)', JSON.stringify(pk)); // v10.17
     await page.waitForTimeout(2200);
     const hold = await page.evaluate(() => { const i = Rig.instances().find((x) => document.querySelector('#chTop').contains(x.host)); return { bak: !!(i.clip && i.clip.def.bak), head: Math.round(i.pose.bas.rot) }; });
     ok(hold.bak && hold.head < -4, V.n + ': bakış süresince poz tutuluyor (3 sn sonra hâlâ hedefe dönük)', JSON.stringify(hold));
@@ -47,10 +48,11 @@ async function enter(page, settings) {
     ok(rel.every((x) => x === 'bos:0'), V.n + ': bakış bitince karakterler bekleme pozuna döndü', rel.join(' '));
     // 3) tokat: ben (0) sağ koltuğu (1) yakalarım; sol (3) üstü (2) yakalar
     await page.evaluate(() => { AO.slapAnim(0, 1); AO.slapAnim(3, 2); }); await page.waitForTimeout(600);
-    const sl = await page.evaluate(() => { const ins = (sel) => Rig.instances().find((i) => document.querySelector(sel).contains(i.host)); const left = ins('#chLeft'), top = ins('#chTop'), right = ins('#chRight'), me = ins('#meAv'); const arm = (i) => Math.max.apply(null, Object.keys(i.pose).filter((k) => /onkol/.test(k)).map((k) => Math.abs(i.pose[k].rot || 0))); const face = (i) => (i.bones.bas.img.getAttribute('src') || '').slice(-40); return { leftArm: Math.round(arm(left)), meArm: Math.round(arm(me)), topHead: Math.round(top.pose.bas.rot), rightHead: Math.round(right.pose.bas.rot), topFace: face(top), anims: ['chLeft', 'chTop', 'chRight'].map((id) => getComputedStyle(document.querySelector('#' + id + ' .avw')).animationName).join(',') }; });
+    const sl = await page.evaluate(() => { const ins = (sel) => Rig.instances().find((i) => document.querySelector(sel).contains(i.host)); const left = ins('#chLeft'), top = ins('#chTop'), right = ins('#chRight'), me = ins('#meAv'); const arm = (i) => Math.max.apply(null, Object.keys(i.pose).filter((k) => /onkol/.test(k)).map((k) => Math.abs(i.pose[k].rot || 0))); const hv = (i, re) => { const k = Object.keys(i.bones).find((n) => re.test(n)); return k ? i.bones[k].variant : null; }; return { leftArm: Math.round(arm(left)), meArm: Math.round(arm(me)), topHead: Math.round(top.pose.bas.rot), rightHead: Math.round(right.pose.bas.rot), topFace: top.bones.bas.variant, rightFace: right.bones.bas.variant, leftFace: left.bones.bas.variant, leftHand: hv(left, /^el-(sol|on)$/), meHand: hv(me, /^el-sag$/), anims: ['chLeft', 'chTop', 'chRight'].map((id) => getComputedStyle(document.querySelector('#' + id + ' .avw')).animationName).join(',') }; });
     ok(sl.leftArm > 20 && sl.meArm > 20, V.n + ': tokat atanın ön kolu savruluyor (sol koltuk ve kendi portren)', JSON.stringify(sl));
     ok(Math.abs(sl.topHead) > 2 || Math.abs(sl.rightHead) > 2, V.n + ': tokat yiyenin başı savruluyor', JSON.stringify(sl));
     ok(sl.anims === 'none,none,none', V.n + ': tokatta bütün resim kaymıyor', sl.anims);
+    ok(sl.leftFace === 'kizgin' && sl.leftHand === 'tokat' && sl.meHand === 'tokat' && sl.topFace === 'sersem' && sl.rightFace === 'sersem', V.n + ': üretim 10 — tokatta kızgın yüz + tokat eli (yanda yakın el), yiyende sersem yüz', JSON.stringify(sl)); // v10.17
     await page.screenshot({ path: OUT + '/skinrig_tokat_' + (V.mobile ? 'tel' : 'masa') + '.png' });
     await page.waitForTimeout(1600);
     // 4) zafer + tos hedefi
@@ -58,6 +60,11 @@ async function enter(page, settings) {
     const zt = await page.evaluate(() => ['chLeft', 'chRight', 'chTop'].map((id) => getComputedStyle(document.querySelector('#' + id + ' .avw')).animationName));
     ok(zt.every((a) => !/zaferBounce|tosHit|shakeX/.test(a)), V.n + ': Zafer ve Tos (vuran ve hedef) rig\'de bütün resmi kaydırmıyor', zt.join(','));
     await page.waitForTimeout(2500);
+    // 4b) üretim 10: İnce Ayar işaret parmağı (kendi portrem), yan koltukta Tersten El → el-on 'tut'
+    await page.evaluate(() => { AO.playIntroAt(0, 'ince_ayar'); AO.playIntroAt(1, 'tersten_el'); }); await page.waitForTimeout(500);
+    const iv = await page.evaluate(() => { const ins = (sel) => Rig.instances().find((i) => document.querySelector(sel).contains(i.host)); const me = ins('#meAv'), right = ins('#chRight'); return { meHand: me.bones['el-sag'].variant, rightHand: right.bones['el-on'] ? right.bones['el-on'].variant : null, rightSrcOk: right.bones['el-on'] ? /^blob:|el-on-tut/.test(right.bones['el-on'].img.src) : false }; }); // gardırop parçaları blob adresli
+    ok(iv.meHand === 'isaret' && iv.rightHand === 'tut' && iv.rightSrcOk, V.n + ': üretim 10 — İnce Ayar işaret parmağı; yan koltukta Tersten El taş tutan el (el-on-tut)', JSON.stringify(iv));
+    await page.waitForTimeout(2200);
     // 5) kendi giriş skinim: portre kırpımı genişler
     await page.evaluate(() => AO.playIntroAt(0, 'tersten_el')); await page.waitForTimeout(450);
     const z1 = await page.evaluate(() => { const i = Rig.instances().find((x) => document.querySelector('#meAv').contains(x.host)); return { on: document.querySelector('#meAv').classList.contains('actOn'), crop: i.crop, ifx: !!document.querySelector('.ifx') }; });
