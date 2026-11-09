@@ -49,7 +49,7 @@ var Rig = (function () {
     restoreProps(inst);
     fit(inst); INST.push(inst); tick(0, inst); loop(); return inst;
   }
-  function fit(inst) { var w = inst.host.clientWidth || CS, h = inst.host.clientHeight || CS, c = inst.crop || [0, 0, CS, CS], s = Math.min(w / c[2], h / c[3]); inst.scale = s; inst.crop0 = [c[0], c[1]]; inst.root.style.transform = 'scale(' + s + ')' + (c[0] || c[1] ? ' translate(' + (-c[0]) + 'px,' + (-c[1]) + 'px)' : '') + (inst.mirror ? ' matrix(-1,0,0,1,' + CS + ',0)' : ''); } // mirror: sol koltuk (yan görsel sola bakar)
+  function fit(inst) { var w = inst.host.clientWidth || CS, h = inst.host.clientHeight || CS, c = inst.crop || [0, 0, CS, CS], s = Math.min(w / c[2], h / c[3]); inst.scale = s; inst.crop0 = [c[0], c[1]]; inst.root.style.transform = 'scale(' + s + ') translate(' + (-c[0]) + 'px,' + (-c[1]) + 'px)' + (inst.mirror ? ' matrix(-1,0,0,1,' + CS + ',0)' : ''); } // v10.16: translate her zaman var (kırpım değişince geçiş aynı dönüşüm listesiyle yumuşak) // mirror: sol koltuk (yan görsel sola bakar)
   function unmount(inst) { if (!inst) return; var i = INST.indexOf(inst); if (i >= 0) INST.splice(i, 1); if (inst.root && inst.root.parentNode) inst.root.parentNode.removeChild(inst.root); inst.host.classList.remove('rig'); }
   function unmountAll(host) { INST.filter(function (x) { return x.host === host; }).forEach(unmount); }
   // ---- varyant (yüz / el pozu) ----
@@ -100,11 +100,11 @@ var Rig = (function () {
     if (inst.clip) stop(inst);
     var sure = inst.reduce ? Math.min(clip.sure, 400) : clip.sure;
     var def = inst.view === 'yan' && clip.yan ? Object.assign({}, clip, clip.yan) : clip; // v9.97: yan görünüm için klip üstüne yazımı (ör. arka kol gövdenin arkasında kalır, sunum yapmaz)
-    inst.clip = { def: def, start: performance.now(), sure: sure, fired: {}, done: done || null, holdFace: false, hideProps: clipHides(inst, def) };
+    inst.clip = { def: def, start: performance.now(), sure: sure, fired: {}, done: done || null, holdFace: false, hideProps: clipHides(inst, def), holdT: typeof def.bekle === 'number' ? def.bekle : null, released: false }; // v10.16: bekle (0..1) — klip o anda durur, release() gelene kadar pozu tutar (bakış)
     syncProps(inst); if (HOOKS.play) { try { HOOKS.play(inst, def); } catch (e) {} } loop();
   }
   function step(inst, t) {
-    var c = inst.clip, u = Math.min(1, (t - c.start) / c.sure);
+    var c = inst.clip, u = Math.min(1, (t - c.start) / c.sure); if (c.holdT != null && !c.released && u > c.holdT) u = c.holdT; // v10.16: bakış süresince poz tutulur
     Object.keys(c.def.kemik || {}).forEach(function (k) { var n = boneName(inst, k), s = sample(c.def.kemik[k], u); if (s && inst.pose[n]) { inst.pose[n].rot = s.rot || 0; inst.pose[n].dx = s.dx || 0; inst.pose[n].dy = s.dy || 0; inst.pose[n].sc = s.sc != null ? s.sc : 1; } });
     (c.def.olay || []).forEach(function (ev, i) { if (c.fired[i] || u < ev.t) return; c.fired[i] = 1; fire(inst, ev); });
     if (u >= 1) { var d = c.done; Object.keys(inst.pose).forEach(function (n) { inst.pose[n] = { rot: 0, dx: 0, dy: 0, sc: 1 }; }); inst.clip = null; setVariant(inst, 'bas', inst.face || null); Object.keys(inst.props).forEach(function (k) { if (inst.props[k].bone && !inst.props[k].auto) detach(inst, k); }); restoreProps(inst); if (HOOKS.end) { try { HOOKS.end(inst); } catch (e) {} } if (d) d(); }
@@ -155,8 +155,10 @@ var Rig = (function () {
   ['zafer', 'ikram'].forEach(function (n) { var c = CLIPS[n], k = {}; Object.keys(c.kemik).forEach(function (b) { k[b.replace('-sag', '-sol')] = c.kemik[b]; }); c.yan = { kemik: k, olay: c.olay.map(function (ev) { return ev.kemik && ev.kemik.indexOf('-sag') > 0 ? Object.assign({}, ev, { kemik: ev.kemik.replace('-sag', '-sol') }) : ev; }) }; }); // yan: yakın kol (sol→on). pati / kulak eli yan görünümde arka koldadır (Nine, Pamuk: arka ön kol gövdenin önünde) → o klipler eşlenmez
   ['intro_tersten_el', 'intro_ince_ayar', 'intro_gosterissiz_numara', 'intro_ortayi_kokla'].forEach(function (n) { var c = CLIPS[n], k = {}; Object.keys(c.kemik).forEach(function (b) { k[b.replace('-sag', '-sol')] = c.kemik[b]; }); c.yan = { kemik: k, olay: c.olay.map(function (ev) { return ev.kemik === 'el-sag' ? Object.assign({}, ev, { kemik: 'el-sol' }) : ev; }) }; }); // yan: ön kol (sol→on); sağ elin tut/acik varyantları ön elde yoksa varsayılan el kalır
   (function () { var c = CLIPS.cay_servisi, k = {}; Object.keys(c.kemik).forEach(function (n) { if (n.indexOf('-sag') < 0) k[n] = c.kemik[n]; }); c.yan = { kemik: k, olay: c.olay.filter(function (ev) { return ev.kemik !== 'el-sag'; }) }; })(); // yan: arka kol (sag→arka) gövdenin arkasında; sunum eli görünmez, o yüzden yalnız tepsi kolu + baş
+  function release(inst) { var c = inst && inst.clip; if (!c || c.holdT == null || c.released) return; c.released = true; var now = performance.now(); if ((now - c.start) / c.sure > c.holdT) c.start = now - c.holdT * c.sure; } // v10.16: tutulan klibi bitişe bırak (poz yumuşakça beklemeye döner)
+  function setCrop(inst, crop) { if (!inst || !inst.root) return; inst.crop = crop || null; fit(inst); } // v10.16: portre kırpımı (kendi skininde eller görünsün)
   function refit() { INST.forEach(fit); }
   if (typeof window !== 'undefined') window.addEventListener('resize', refit);
-  return { hooks: HOOKS, load: fetchDef, has: has, register: register, unregister: unregister, hasVariant: hasVariant, mount: mount, unmount: unmount, unmountAll: unmountAll, play: play, stop: stop, attach: attach, detach: detach, setVariant: setVariant, point: point, CLIPS: CLIPS, instances: function () { return INST.slice(); }, _m: { mul: mul, local: local, apply: apply, sample: sample, boneName: boneName } };
+  return { hooks: HOOKS, load: fetchDef, has: has, register: register, unregister: unregister, hasVariant: hasVariant, mount: mount, unmount: unmount, unmountAll: unmountAll, play: play, stop: stop, release: release, setCrop: setCrop, attach: attach, detach: detach, setVariant: setVariant, point: point, CLIPS: CLIPS, instances: function () { return INST.slice(); }, _m: { mul: mul, local: local, apply: apply, sample: sample, boneName: boneName } };
 })();
 

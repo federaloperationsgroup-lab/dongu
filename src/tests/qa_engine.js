@@ -7,7 +7,8 @@ ok(Okey.COLORS.length === 4 && Okey.TASKS.length >= 7, 'renk 4, görev listesi '
 let g = Okey.newGame(['A', 'B', 'C', 'D'], { seed: 7 }); Okey.startHand(g);
 ok(g.players.every((p) => p.hand.length === 14) && g.phase === 'pickup', 'el başı: herkes 14 taş, başlayan desteden çeker (pickup)', g.players.map((p) => p.hand.length).join(',') + ' ' + g.phase);
 ok(g.deck.length === 106 - 14 * 4 - 1, 'deste: 106 − 56 − gösterge = 49', g.deck.length);
-ok(g.ok && g.indicator && !g.ok.fakeIsOkey && g.ok.c === g.indicator.c && g.ok.n === (g.indicator.n % 13) + 1 && Okey.isJoker({ c: g.ok.c, n: g.ok.n, fake: false, id: 999 }, g.ok), 'okey = gösterge + 1 (aynı renk, 13 → 1)', JSON.stringify({ ind: g.indicator, ok: g.ok }).slice(0, 120));
+// v10.16: 12 ellik maçta bir el "garanti sahte okey göstergeli el"dir (motor kuralı: gösterge sahte okey → sahte okeyler okey olur); test 1. el o ele denk gelince de doğru kuralı bekler (önceden ~%8 olasılıkla yanlış FAIL)
+ok(g.ok && g.indicator && (g.indicator.fake ? (g.ok.fakeIsOkey && g.hand === g.guaranteedFakeIndicatorHand && Okey.isJoker({ c: -1, n: 0, fake: true, id: 104 }, g.ok)) : (!g.ok.fakeIsOkey && g.ok.c === g.indicator.c && g.ok.n === (g.indicator.n % 13) + 1 && Okey.isJoker({ c: g.ok.c, n: g.ok.n, fake: false, id: 999 }, g.ok))), 'okey = gösterge + 1 (aynı renk, 13 → 1; garanti sahte göstergeli elde sahte okey okeydir)', JSON.stringify({ ind: g.indicator, ok: g.ok, h: g.hand, gf: g.guaranteedFakeIndicatorHand }).slice(0, 160));
 try { Okey.actOpen(g, g.cp, [[]]); ok(false, 'ilk tur açılma reddi'); } catch (e) { ok(/ilk tur|turda|görev|açıl/i.test(e.message) || true, 'ilk turda açılma reddedildi: ' + e.message); }
 // 200 tam el: bot adımlarıyla
 let errs = [], hands = 0, finishes = { normal: 0, okey: 0, deckout: 0 }, maxTurns = 0;

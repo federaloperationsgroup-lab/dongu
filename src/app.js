@@ -6,7 +6,7 @@
   if (window.DonguI18n && DonguI18n.en && window.Okey && Okey.COLORS) Okey.COLORS.splice(0, 4, 'Fire', 'Star', 'Water', 'Sun');
   var SC = 1; // sahne ölçeği (1600×900 -> ekran)
   var ME = 0;
-  var VERSION = '10.15';
+  var VERSION = '10.16';
   var INVITE_ON = true; // v10.10 (K177): masa daveti / "Bu grupla yeniden" / arkadaşla "Oyna" — sunucu desteğiyle birlikte açılır
   // v10.02 (K139): mağaza uygulaması (Capacitor, Android + iOS) — sayfa paketten (capacitor://localhost / https://localhost) açılır, sunucu sabit dongu.app
   var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -1207,17 +1207,22 @@
   // Bot karakter resimleri (paket 2-A). Pozlar: on (karşı koltuk), yan (sol; sağ için aynalanır), arka, bust (portre)
   var BOT_IMG = { 1: 'ali', 2: 'ayse', 3: 'mehmet' };
   var POSE_IMG = { front: 'on', left: 'yan', right: 'yan', back: 'arka' };
+  // v10.16 (K194): botlar (Ali, Ayşe, Mehmet) gardıroptan giyinir — oyuncu karakterleri gibi parçalı (rig): skinlerde başı, kolu ve yüzü oynar. Eski tek resimler (bot-*.webp) artık gösterilmez.
+  var BOT_LOOK = { ali: { gender: 'erkek', skin: '#f0c8a8', hair: 'dalgali', hairColor: '#8e2f24', outfit: 'deri-ceket', acc: 'pilotgozlugu' }, ayse: { gender: 'kadin', skin: '#f0c8a8', hair: 'dalgali', hairColor: '#e8e2d6', outfit: 'ust-gece-kimono', earring: 'aks-iki-yorunge', makeup: 'mak-ruj-pembe' }, mehmet: { gender: 'erkek', skin: '#d7906f', hair: 'kisa', hairColor: '#4b2e1a', outfit: 'ust-nane-atolye', necklace: 'aks-gezgin-dugumu' } };
+  var BOT_NAME = { ali: 'Ali', ayse: 'Ayşe', mehmet: 'Mehmet' };
+  function botLook(id) { var b = BOT_LOOK[id] ? id : 'ali'; return normAvatar(Object.assign({}, DEFAULT_AV, { name: BOT_NAME[b], beard: 'yok', acc: 'yok', full: 'yok' }, BOT_LOOK[b])); }
+  function seatLook(p) { var sa = seatAvatar(p); if (sa && sa.bot) return botLook(sa.bot); if (sa) return sa; return p !== ME && BOT_IMG[p] ? botLook(BOT_IMG[p]) : null; } // görünüm için (bot → gardırop karakteri); kural ve ekonomi kodu seatAvatar'ı kullanır
   function seatAvatar(p) { // çevrim içi: koltuktaki oyuncunun avatarı (bot ise {bot:'ali'})
     if (!NET.online || !NET.seats) return null; var s = NET.seats[(p + NET.seat) % 4]; return s ? (s.avatar || { v: 2 }) : { bot: 'ali' };
   }
   function charaView(p, pose) {
     var sa = seatAvatar(p);
-    if (sa && sa.bot) return __L("<img class=\"av wait{0}\" alt=\"\" draggable=\"false\" src=\"assets/bot-{1}-{2}.webp\">", [(pose === 'right' ? ' mirror' : ''), (sa.bot), (POSE_IMG[pose])]);
+    if (sa && sa.bot) return charImgHTML(botLook(sa.bot), pose === 'back' ? 'arka' : pose, pose === 'left' ? 'mirror' : ''); // v10.16: bot = gardırop karakteri (sol koltukta aynalı, oyuncularla aynı kural)
     if (sa && p !== ME) return charImgHTML(sa, pose === 'back' ? 'arka' : pose, pose === 'left' ? 'mirror' : ''); // v9.95: yan görseller sola bakar; sol koltukta aynalanır ki masaya dönük otursun (önce sol koltuktaki oyuncu masaya sırtını dönmüş gibi dışarı bakıyordu; botlar zaten aynalanıyordu)
-    if (p !== ME && BOT_IMG[p]) return __L("<img class=\"av wait{0}\" alt=\"\" draggable=\"false\" src=\"assets/bot-{1}-{2}.webp\">", [(pose === 'right' ? ' mirror' : ''), (BOT_IMG[p]), (POSE_IMG[pose])]);
+    if (p !== ME && BOT_IMG[p]) return charImgHTML(botLook(BOT_IMG[p]), pose === 'back' ? 'arka' : pose, pose === 'left' ? 'mirror' : ''); // v10.16
     return charImgHTML(avatarFor(p), pose === 'back' ? 'arka' : pose, 'me');
   }
-  function portrait(p) { var sa = seatAvatar(p); if (sa && sa.bot) return __L("<img class=\"av\" alt=\"\" draggable=\"false\" src=\"assets/bot-{0}-bust.webp\">", [(sa.bot)]); if (sa && p !== ME) return charImgHTML(sa, 'bust', 'bust'); return (p !== ME && BOT_IMG[p]) ? __L("<img class=\"av\" alt=\"\" draggable=\"false\" src=\"assets/bot-{0}-bust.webp\">", [(BOT_IMG[p])]) : charImgHTML(avatarFor(p), 'bust', 'bust'); }
+  function portrait(p) { var look = p !== ME ? seatLook(p) : null; return charImgHTML(look || avatarFor(p), 'bust', 'bust'); } // v10.16: botlar da gardırop karakteri
   function setCls(av, cls) { if (!av) return; if (av.className !== undefined && av.className.baseVal !== undefined) av.className.baseVal = cls; else av.className = cls; }
   function seatLevel(p) { // v9.86 (K107): masadaki seviye rozeti — kendin her zaman; çevrim içinde hesabı olan gerçek oyuncular; botlarda yok
     if (p === ME) return myLevel();
@@ -1225,13 +1230,14 @@
     var s = NET.seats[(p + NET.seat) % 4]; return s && !s.bot && s.prof && s.prof.level ? s.prof.level : 0;
   }
   function rigSeat(p) { // K121: koltuktaki özel karakter için rig varsa (assets/rig/<karakter>/rig.json) tek resmin yerine parçalı karakter kurulur; yoksa hiçbir şey değişmez
-    if (!window.Rig || p === ME) return; var sa = seatAvatar(p); if (!sa || sa.bot) return;
+    if (!window.Rig || p === ME) return; var sa = seatLook(p); if (!sa) return; // v10.16: botlar da parçalı (gardırop karakteri)
     var el = $(SEAT[p].ch), avw = el && el.querySelector('.avw'); if (!avw) return; var view = SEAT[p].pose === 'front' ? 'on' : 'yan', mo = { phase: p * 1.6, reduce: !!settings.reduceMotion, mirror: SEAT[p].pose === 'left', events: { servis: function (ev, hp) { cayCups(); } } };
     if (sa.full && sa.full !== 'yok' && FULL_CHARS[sa.full]) { var char = sa.full; Rig.load(char).then(function (def) { if (!def || !built || !avw.isConnected || avw.classList.contains('rig')) return; Rig.mount(avw, char, view, mo); }); return; }
     if (!canGardropRig(sa)) return; // v10.13 (08-C): oyuncunun kendi karakteri de parçalı
     gardropRig(sa, view).then(function (name) { if (!name || !built || !avw.isConnected || avw.classList.contains('rig')) return; Rig.mount(avw, name, view, mo); });
   }
   function rigOf(p) { if (!window.Rig) return null; var el = p === ME ? $('meAv') : $(SEAT[p] ? SEAT[p].ch : 'chMe'); return Rig.instances().filter(function (i) { return el && el.contains(i.host); })[0] || null; } // v9.97: kendi rig'in portre dairesinde
+  var ME_BUST = [96, 0, 288, 288], ME_WIDE = [0, 0, 480, 480]; // v10.16: portre kırpımları — baş-omuz / üst gövde (kendi skininde eller görünsün)
   function rigMe() { // v9.97: kendi portren (sol alt daire) rig'li karakterde parçalı: 'on' görünümünün baş+omuz kırpımı; Çay Servisi kendi ekranında da elde tepsiyle oynar; masadaki arka görünüm (#chMe) eski resim
     if (!window.Rig || !G) return; Rig.instances().forEach(function (i) { if (!i.host.isConnected) Rig.unmount(i); }); var host = $('meAv') && $('meAv').querySelector('.avw'); if (!host) return;
     var a = normAvatar(myAvatar || DEFAULT_AV); var isFull = !!(a.full && a.full !== 'yok' && FULL_CHARS[a.full]), gr = !isFull && canGardropRig(a);
@@ -1240,7 +1246,14 @@
     if (host.dataset.rigChar === sig && host.classList.contains('rig')) return;
     if (host.dataset.rigLoading === sig) return; host.dataset.rigLoading = sig;
     var ld = isFull ? Rig.load(a.full).then(function (def) { return def ? a.full : null; }) : gardropRig(a, 'on');
-    ld.then(function (nm) { if (host.dataset.rigLoading === sig) host.dataset.rigLoading = ''; if (!nm || !G || !host.isConnected) return; var cur = normAvatar(myAvatar || DEFAULT_AV); if ((isFull ? cur.full : 'gardrop:' + meSig(cur)) !== sig) return; Rig.unmountAll(host); Rig.mount(host, nm, 'on', { phase: 0.9, reduce: !!settings.reduceMotion, crop: [96, 0, 288, 288], events: { servis: function () { cayCups(); } } }); host.dataset.rigChar = sig; });
+    ld.then(function (nm) { if (host.dataset.rigLoading === sig) host.dataset.rigLoading = ''; if (!nm || !G || !host.isConnected) return; var cur = normAvatar(myAvatar || DEFAULT_AV); if ((isFull ? cur.full : 'gardrop:' + meSig(cur)) !== sig) return; Rig.unmountAll(host); Rig.mount(host, nm, 'on', { phase: 0.9, reduce: !!settings.reduceMotion, crop: ME_BUST, events: { servis: function () { cayCups(); } } }); host.dataset.rigChar = sig; });
+  }
+  function rigPreview(box, av) { // v10.16 (K194): mağazadaki Masa Girişi önizlemesi — karakter parçalıysa üst gövde kırpımıyla rig kurulur; klip playIntroOn'da oynar
+    if (!box || !window.Rig || settings.noRig) return; var host = box.querySelector('.avw'); if (!host) return;
+    Rig.instances().forEach(function (i) { if (!i.host.isConnected) Rig.unmount(i); });
+    var a = normAvatar(av || myAvatar || DEFAULT_AV), isFull = !!(a.full && a.full !== 'yok' && FULL_CHARS[a.full]);
+    var ld = isFull ? Rig.load(a.full).then(function (def) { return def ? a.full : null; }) : (canGardropRig(a) ? gardropRig(a, 'on') : Promise.resolve(null));
+    ld.then(function (nm) { if (!nm || !host.isConnected || host.classList.contains('rig')) return; Rig.mount(host, nm, 'on', { phase: 2.1, reduce: !!settings.reduceMotion, crop: ME_WIDE }); });
   }
   function setMeAv(a) { $('meAv').innerHTML = '<span class="avw">' + charImgHTML(a, 'bust', 'bust') + '</span>'; rigMe(); } // v9.97: portre her zaman .avw sarmalayıcısıyla (giriş skini animasyonu + rig)
   function cayCups() { [0, 1, 2, 3].forEach(function (p, i) { setTimeout(function () { if (!G) return; spawnFx('fx-cay', CUP_XY[p][0], CUP_XY[p][1], 10000); sfxOnce('cayting', 'cay:' + (i + 1), 100); }, i * 140); }); }
@@ -2241,7 +2254,7 @@
     var W = anchor.offsetWidth || 200, H = anchor.offsetHeight || 200, isPortrait = anchor.id === 'meAv' || anchor.classList.contains('introPv');
     var hx = isPortrait ? W * 0.82 : W / 2, hy = isPortrait ? H * 0.3 : H * 0.72; // "el" konumu (portrede sağ üst: Diz düğmesini kapatmaz)
     var rgI = window.Rig ? Rig.instances().filter(function (i) { return anchor.contains(i.host); })[0] : null, rgClip = rgI && Rig.CLIPS['intro_' + skin]; // v9.99 (K130): rig'li karakterde kol/bilek/baş klibi; DOM taş/iz efektleri gerçek el noktasından
-    if (rgI && rgClip) { var hp = Rig.point(rgI, rgI.view === 'yan' ? 'el-sol' : 'el-sag', 'tutma'); if (hp) { hx = hp[0] + (isPortrait ? 6 : 0); hy = hp[1] + (isPortrait ? 6 : 0); } Rig.play(rgI, rgClip); }
+    if (rgI && rgClip) { Rig.play(rgI, rgClip); var hp = Rig.point(rgI, rgI.view === 'yan' ? 'el-sol' : 'el-sag', 'tutma'); if (hp) { hx = hp[0] + (isPortrait ? 6 : 0); hy = hp[1] + (isPortrait ? 6 : 0); } } // v10.16: önce klip (portrede kırpım genişler), sonra el noktası
     var D = Math.round(Math.min(W, H) * 0.3), dx = dir.x * D, dy = dir.y * D, ms = INTRO_SKINS[skin].ms, reduce = reduceMotion;
     function at(x, y, el) { el.style.left = x + 'px'; el.style.top = y + 'px'; fx.appendChild(el); return el; }
     function tile(front) { var e = front ? tileEl({ c: 2, n: 7, fake: false, id: -1 }) : backEl(); e.classList.add('ifxt'); e.style.setProperty('--tw', Math.round(Math.max(28, Math.min(W, H) * 0.19)) + 'px'); return e; }
@@ -2353,19 +2366,44 @@
   var SEAT_XY = { 0: [800, 760], 1: [1480, 320], 2: [800, 120], 3: [120, 320] };
   function dirTo(from, to) { var dx = SEAT_XY[to][0] - SEAT_XY[from][0], dy = SEAT_XY[to][1] - SEAT_XY[from][1]; return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'); }
   function peekAnim(from, to, on) {
-    var el = $(SEAT[from].ch); el.classList.remove('peek-left', 'peek-right', 'peek-up', 'peek-down');
-    if (on) { el.classList.add('peek-' + dirTo(from, to)); if (from !== ME) { bubble(from, '👀'); if (!PEEK.restoring) sfxOnce('peekfx', 'peek:' + from + ':' + to, 600); } } // v9.88: bakış sesi (yeniden bağlanma geri yüklemesinde çalmaz)
+    var el = $(SEAT[from].ch), rg = rigOf(from); el.classList.remove('peek-left', 'peek-right', 'peek-up', 'peek-down');
+    if (on) { if (rg) Rig.play(rg, bakKlip(rg, from, to)); else el.classList.add('peek-' + dirTo(from, to)); if (from !== ME) { bubble(from, '👀'); if (!PEEK.restoring) sfxOnce('peekfx', 'peek:' + from + ':' + to, 600); } } // v9.88: bakış sesi (yeniden bağlanma geri yüklemesinde çalmaz); v10.16 (K194): parçalı karakter başını ve gövdesini hedefe çevirir, bütün resim kaymaz (kendin: portrede)
+    else if (rg && rg.clip && rg.clip.def && rg.clip.def.bak) Rig.release(rg);
+  }
+  // v10.16 (K194): bakış ve tokat klipleri — yön koltuk konumlarından (SEAT_XY); aynalı koltukta rig uzayına çevrilir. Yüz ve el adları dizi: karakterde olan ilk varyant (üretim 10 gelince kacamak/kizgin/sersem/tokat).
+  function rigDir(inst, from, to) { var dx = SEAT_XY[to][0] - SEAT_XY[from][0], dy = SEAT_XY[to][1] - SEAT_XY[from][1], n = Math.sqrt(dx * dx + dy * dy) || 1; return { vx: (inst && inst.mirror ? -dx : dx) / n, vy: dy / n }; }
+  function clamp1(v) { return Math.max(-1, Math.min(1, v)); }
+  function holdKeys(P) { var k = {}; Object.keys(P).forEach(function (b) { k[b] = [{ t: 0 }, Object.assign({ t: 0.32 }, P[b]), Object.assign({ t: 0.68 }, P[b]), { t: 1 }]; }); return k; }
+  function bakKlip(inst, from, to) { // gövde hedefe eğilir, baş uzanır, göz ucuyla bakış; bakış bitene kadar poz tutulur (bekle)
+    var d = rigDir(inst, from, to), P, face;
+    if (inst.view === 'yan') { var f = clamp1(-d.vx * 1.3), u = clamp1(-d.vy * 1.4); P = { govde: { rot: -5 * f, dx: -8 * f }, bas: { rot: 10 * u, dx: -14 * f, dy: -2 * Math.abs(u) } }; face = ['kacamak', 'gulumse']; } // yan görünüm sola (masaya) bakar: ileri = -x, yukarı bakış = saat yönü
+    else { var lean = clamp1(d.vx * 1.3), down = Math.max(0, d.vy), up = Math.max(0, -d.vy); P = { govde: { rot: 6 * lean, dy: 3 * down - 2 * up, sc: 1 + 0.03 * down }, bas: { rot: 9 * lean, dx: 14 * lean, dy: 6 * down - 3 * up } }; face = [lean < 0 ? 'kacamak-sol' : 'kacamak-sag', 'gulumse']; }
+    return { sure: 1500, bekle: 0.5, bak: true, kemik: holdKeys(P), olay: [{ t: 0.12, tur: 'varyant', kemik: 'bas', ad: face }, { t: 0.8, tur: 'varyant', kemik: 'bas', ad: null }] };
+  }
+  function tokatKlip(inst, from, to) { // yakalayan: kol geri alınır, hedefe savrulur (açık el), kızgın yüz; yan görünümde yakın kol (sol → on) öne
+    var d = rigDir(inst, from, to), face = ['kizgin', 'ciddi', 'sasir'];
+    if (inst.view === 'yan') return { sure: 900, kemik: { 'ustkol-sol': [{ t: 0 }, { t: 0.25, rot: -12 }, { t: 0.42, rot: 22 }, { t: 0.62, rot: 16 }, { t: 1 }], 'onkol-sol': [{ t: 0 }, { t: 0.25, rot: -22 }, { t: 0.42, rot: 55 }, { t: 0.62, rot: 45 }, { t: 1 }], 'el-sol': [{ t: 0 }, { t: 0.25, rot: 12 }, { t: 0.42, rot: -18 }, { t: 1 }], govde: [{ t: 0 }, { t: 0.42, rot: -3, dx: -5 }, { t: 0.7, rot: -2 }, { t: 1 }], bas: [{ t: 0 }, { t: 0.3, rot: 4 * clamp1(-d.vy), dx: -6 }, { t: 0.7, dx: -4 }, { t: 1 }] },
+      olay: [{ t: 0.04, tur: 'varyant', kemik: 'bas', ad: face }, { t: 0.04, tur: 'varyant', kemik: 'el-sol', ad: ['tokat', 'acik'] }, { t: 0.85, tur: 'varyant', kemik: 'el-sol', ad: null }, { t: 0.92, tur: 'varyant', kemik: 'bas', ad: null }] };
+    var sg = d.vx > 0.2 ? -1 : 1, lx = clamp1(d.vx); // sağ kol: hedef soldaysa içe (+), sağdaysa dışa (−) savrulur
+    return { sure: 900, kemik: { 'ustkol-sag': [{ t: 0 }, { t: 0.25, rot: -10 * sg }, { t: 0.42, rot: 20 * sg }, { t: 0.62, rot: 15 * sg }, { t: 1 }], 'onkol-sag': [{ t: 0 }, { t: 0.25, rot: -20 * sg }, { t: 0.42, rot: 50 * sg }, { t: 0.62, rot: 42 * sg }, { t: 1 }], 'el-sag': [{ t: 0 }, { t: 0.25, rot: 10 * sg }, { t: 0.42, rot: -15 * sg }, { t: 1 }], govde: [{ t: 0 }, { t: 0.42, rot: 3 * lx }, { t: 1 }], bas: [{ t: 0 }, { t: 0.3, rot: 6 * lx, dx: 6 * lx }, { t: 0.7, rot: 3 * lx }, { t: 1 }] },
+      olay: [{ t: 0.04, tur: 'varyant', kemik: 'bas', ad: face }, { t: 0.04, tur: 'varyant', kemik: 'el-sag', ad: ['tokat', 'acik'] }, { t: 0.85, tur: 'varyant', kemik: 'el-sag', ad: null }, { t: 0.92, tur: 'varyant', kemik: 'bas', ad: null }] };
+  }
+  function sersemKlip(inst, slapper, victim) { // tokat yiyen: baş darbe yönüne savrulur, geri sallanır; sersem (yoksa şaşkın) yüz
+    var d = rigDir(inst, slapper, victim), px = clamp1(d.vx * 1.5); if (Math.abs(px) < 0.3) px = px < 0 ? -0.6 : 0.6;
+    var R = (inst.view === 'yan' ? 12 : 13) * px, X = (inst.view === 'yan' ? 9 : 10) * px;
+    return { sure: 1100, kemik: { bas: [{ t: 0 }, { t: 0.1, rot: R, dx: X, dy: -3 }, { t: 0.28, rot: -R * 0.35, dx: -X * 0.3 }, { t: 0.45, rot: R * 0.25 }, { t: 0.62, rot: -R * 0.12 }, { t: 1 }], govde: [{ t: 0 }, { t: 0.12, rot: 3 * px, dx: 4 * px }, { t: 0.35, rot: -px }, { t: 1 }] },
+      olay: [{ t: 0.06, tur: 'varyant', kemik: 'bas', ad: ['sersem', 'sasir'] }, { t: 0.9, tur: 'varyant', kemik: 'bas', ad: null }] };
   }
   function slapHappened(target, peeker) { // hedef oyuncu bakanı yakaladı
     if (peeker === ME) endPeek('slap');
     slapAnim(target, peeker);
   }
   function slapAnim(target, peeker) {
-    var t = $(SEAT[target].ch), p = $(SEAT[peeker].ch), d = dirTo(target, peeker);
-    t.classList.add('slap-' + d); setTimeout(function () { t.classList.remove('slap-' + d); }, 650);
+    var t = $(SEAT[target].ch), p = $(SEAT[peeker].ch), d = dirTo(target, peeker), rgT = rigOf(target);
+    if (rgT) Rig.play(rgT, tokatKlip(rgT, target, peeker)); else { t.classList.add('slap-' + d); setTimeout(function () { t.classList.remove('slap-' + d); }, 650); } // v10.16 (K194): parçalı karakter kolunu savurur
     bubble(target, __L("Hop! Nereye bakıyorsun?"));
     setTimeout(function () {
-      p.classList.remove('peek-left', 'peek-right', 'peek-up', 'peek-down'); p.classList.add('slapped');
+      p.classList.remove('peek-left', 'peek-right', 'peek-up', 'peek-down'); var rgP = rigOf(peeker); if (rgP) Rig.play(rgP, sersemKlip(rgP, target, peeker)); else p.classList.add('slapped'); // v10.16: yiyen başını savurur
       var boom = document.createElement('div'); boom.className = 'boom'; boom.textContent = '💥'; p.appendChild(boom);
       sfx('slap');
       setTimeout(function () { p.classList.remove('slapped'); boom.remove(); }, 900);
@@ -2498,10 +2536,16 @@
   }
   function rigReact(p) { var rg = rigOf(p); if (rg && !rg.clip) Rig.play(rg, Rig.CLIPS.tepki); }
   // v10.07 (K168): üst koltuktaki karakterin elleri masanın kenarının arkasında kalıyordu — kol/el oynatan klip boyunca masaya eğilir (CSS #chTop.leanIn), bitince geri
-  var LEAN_T = null;
+  var LEAN_T = null, ME_T = null;
+  function clipArms(def) { return Object.keys((def && def.kemik) || {}).some(function (k) { return /kol|^el-/.test(k); }); }
+  function meZoom(inst, on) { // v10.16 (K194): kendi skininde portre baş-omuz kırpımından üst gövdeye açılır (eller görünür); bitince geri
+    var me = $('meAv'); if (!me || !inst || !window.Rig) return; clearTimeout(ME_T);
+    if (on) { me.classList.add('actOn'); Rig.setCrop(inst, ME_WIDE); return; }
+    ME_T = setTimeout(function () { if (inst.clip && clipArms(inst.clip.def)) return; me.classList.remove('actOn'); Rig.setCrop(inst, ME_BUST); }, 220);
+  }
   if (window.Rig && Rig.hooks) {
-    Rig.hooks.play = function (inst, def) { var top = $('chTop'); if (!top || !top.contains(inst.host)) return; var arms = Object.keys(def.kemik || {}).some(function (k) { return /kol|^el-/.test(k); }); if (!arms) return; clearTimeout(LEAN_T); top.classList.add('leanIn'); };
-    Rig.hooks.end = function (inst) { var top = $('chTop'); if (!top || !top.contains(inst.host)) return; clearTimeout(LEAN_T); LEAN_T = setTimeout(function () { if (!Rig.instances().some(function (i) { return top.contains(i.host) && i.clip; })) top.classList.remove('leanIn'); }, 150); };
+    Rig.hooks.play = function (inst, def) { var me = $('meAv'); if (me && me.contains(inst.host)) { if (clipArms(def)) meZoom(inst, true); return; } var top = $('chTop'); if (!top || !top.contains(inst.host)) return; if (!clipArms(def)) return; clearTimeout(LEAN_T); top.classList.add('leanIn'); };
+    Rig.hooks.end = function (inst) { var me = $('meAv'); if (me && me.contains(inst.host)) { meZoom(inst, false); return; } var top = $('chTop'); if (!top || !top.contains(inst.host)) return; clearTimeout(LEAN_T); LEAN_T = setTimeout(function () { if (!Rig.instances().some(function (i) { return top.contains(i.host) && i.clip; })) top.classList.remove('leanIn'); }, 150); };
   } // K121: tokat/tos/nazar tepkisi (rig yoksa mevcut CSS sallanma)
   function openTosWindow(target) { if (!G || G.tutorial || target == null || target === ME) return; if (!actionRight('tos').ok) return; var def = Economy.actionSkin('tos') || {}; if ((actUsed().tos || 0) >= (def.perHand || 2)) return; ACT.tosWin = { target: target, until: Date.now() + (def.windowMs || 5000) }; var sb = $('skinBtn'); if (sb) { sb.classList.add('tosReady'); setTimeout(function () { sb.classList.remove('tosReady'); }, def.windowMs || 5000); } syncSkinUI(); if (SKIN.open) renderSkinMenu(); } // bildirim yok (telefonda taşları örter): Skinler düğmesi 5 sn "Tos!" diye parlar
   var INTER_SKINS = { bak: { name: __L("Çaktırmadan Bak"), icon: '👀', desc: __L("Seçtiğin rakibin elini 8 sn görürsün (yalnızca el başı hazırlık süresinde). Fark edilirsen tokat yersin; kullanılan hak geri gelmez.") }, yoklama: { name: __L("Yoklama"), icon: '👂', desc: __L("Seçtiğin rakibin elindeki renk dağılımını 4 sn görürsün (sayılar ve okey gösterilmez).") } };
@@ -2950,7 +2994,7 @@
   function showRoom(m) {
     APP.state = 'ROOM'; NET.lastRoom = m;
     var seats = m.seats.map(function (s, i) {
-      var who = s ? (s.bot ? __L("<img class=\"av\" src=\"assets/bot-{0}-bust.webp\">", [(s.avatar.bot)]) : charImgHTML(s.avatar || DEFAULT_AV, 'bust', 'bust')) : '';
+      var who = s ? charImgHTML(s.bot && s.avatar && s.avatar.bot ? botLook(s.avatar.bot) : (s.avatar || DEFAULT_AV), 'bust', 'bust') : ''; // v10.16
       return __L("<div class=\"seat{0}\"><div class=\"sav\">{1}</div><b>{2}</b><small>{3}</small></div>", [(s ? '' : ' empty'), (who), (s ? s.name : __L("Boş")), (s ? (s.bot ? __L("Bot") : (i === m.host ? __L("Oda sahibi{0}", [(s.connected ? '' : __L(" · Bağlantı yok"))]) : (s.connected ? __L("Bağlı") : __L("Bağlantı yok")))) : (m.quick ? __L("Bekleniyor…") : __L("boş")))]); // v10.09 (K171): Hızlı Katıl'da bot yazısı yok
     }).join('');
     var humans = m.seats.filter(function (s) { return s && !s.bot; }).length, hostSeat = m.host != null ? m.seats[m.host] : null;
@@ -3435,6 +3479,7 @@
       if (isChar && window.Rig && $('chPv')) (function (host, char) { Rig.load(char).then(function (def) { if (!def || !host.isConnected || $('chPv') !== host || host.classList.contains('rig')) return; var ty = tr.querySelector('.tryon'); if (ty) ty.classList.add('rigpv'); var inst = Rig.mount(host, char, 'on', { reduce: !!settings.reduceMotion }); var pb = $('sPlay'); if (pb) { pb.hidden = false; var seq = ['selam', { fikret: 'cay_servisi', sakir: 'tos', muhtar: 'muhur_vur', pamuk: 'pati', nine: 'yoklama_kulak', ordek: 'intro_ortayi_kokla', palyaco: 'intro_gosterissiz_numara' }[char] || 'tepki', 'tepki'], si = 0; pb.onclick = function () { if (inst.clip) return; Rig.play(inst, Rig.CLIPS[seq[si++ % seq.length]]); pb.textContent = __L("▶ Tekrar oynat"); emit('preview'); }; } }); })($('chPv'), tryItem.val); // v9.97: rig'li karakterde büyük parçalı önizleme (nefes/göz kırpma) + Oynat: selam → Çay Servisi → tepki
       if ($('sWalk')) $('sWalk').onclick = function () { var w = $('chPv') && $('chPv').querySelector('.walk'); if (!w) return; w.hidden = !w.hidden; $('chPv').classList.toggle('walking', !w.hidden); this.textContent = w.hidden ? __L("▶ Yürüyüş") : __L("■ Durdur"); emit('preview'); }; // v9.88: hareketli önizleme (kıraathane yürüyüş şeridi, 6 kare); hak harcamaz
       if ($('sPreview')) $('sPreview').onclick = function () { playIntroOn($('introPv'), tryItem.val, { x: 1, y: 0 }); emit('preview'); }; // mağaza önizlemesi sınırsız; maç başı hakkına dahil değil
+      if (isIntro) rigPreview($('introPv'), base); // v10.16 (K194): önizlemede de parçalı karakter — kolu/eli oynar, bütün resim kaymaz
       if ($('sWear')) $('sWear').onclick = function () {
         if (isIntro && TRIAL) { TRIAL.worn = tryItem.val; sfx('place'); emit('wear:trial'); showStore(cat, tryId); return; }
         if (isIntro) { myAvatar = normAvatar(myAvatar || DEFAULT_AV); myAvatar.intro = tryItem.val; store('ao.avatar', myAvatar); accSync(); sfx('place'); toast(__L("{0} sende: masada Skinler panelinden istediğin an kullan.", [(tryItem.name)]), ''); showStore(cat, tryId); return; }
@@ -3517,7 +3562,7 @@
     var me = p === ME, a, name, prof = null, bot = null;
     if (me) { a = normAvatar(myAvatar || DEFAULT_AV); name = a.name; var li = levelInfo(); prof = { level: li.level, into: li.into, need: li.need, matches: ACC.player && ACC.player.stats ? (ACC.player.stats.matches || 0) : null, wins: ACC.player && ACC.player.stats ? (ACC.player.stats.wins || 0) : null, owned: wardrobe.owned.length, venue: (window.Venue && Venue.venue && Venue.venue.mine) ? Venue.venue.name : null }; if (NET.online && NET.seats && NET.seats[NET.seat] && NET.seats[NET.seat].prof && NET.seats[NET.seat].prof.venue) prof.venue = NET.seats[NET.seat].prof.venue; }
     else { var sa = seatAvatar(p); name = G ? G.names[p] : '?'; if (sa && sa.bot) bot = sa.bot; else if (sa) { a = normAvatar(sa); var abs = NET.online ? (p + NET.seat) % 4 : -1; prof = NET.online && NET.seats && NET.seats[abs] ? NET.seats[abs].prof : null; } else if (BOT_IMG[p]) bot = BOT_IMG[p]; }
-    var av = bot ? __L("<img class=\"av\" src=\"assets/bot-{0}-bust.webp\" alt=\"\">", [(bot)]) : charImgHTML(a || DEFAULT_AV, 'bust', 'bust');
+    var av = charImgHTML(bot ? botLook(bot) : (a || DEFAULT_AV), 'bust', 'bust'); // v10.16: bot gardırop karakteri
     var rows = [];
     if (bot) rows.push(__L("<span class=\"note\">Bot — antrenman rakibi</span>"));
     else {
@@ -4423,7 +4468,7 @@
   }
 
   window.DonguApp = { srvHost: srvHost, NATIVE: NATIVE, $: $, overlay: overlay, screen: screen, toast: toast, guard: guard, NET: NET, ACC: ACC, api: api, accBody: accBody, accApply: accApply, charImgHTML: charImgHTML, normAvatar: normAvatar, effectiveAvatar: effectiveAvatar, gardrop: gardrop, GARDROP: GARDROP, GARDROP_VERSION: GARDROP_VERSION, avatar: function () { return normAvatar(myAvatar || DEFAULT_AV); }, matchAvatar: matchAvatar, settings: settings, saveSettings: saveSettings, showLobby: showLobby, showTables: showTables, roomOf: roomOf, roomSel: function () { return lobbySel; }, wardrobe: wardrobe, levelInfo: levelInfo, applyTheme: applyTheme, THEMES: THEMES, UI: UI, sfx: sfx, skinCount: skinCount, stopSession: stopSession, setState: function (st) { APP.state = st; }, state: function () { return APP.state; }, selfHosted: selfHosted, store: store, load: load, socReport: socReport /* v10.11 (K178) */ };
-  window.AO = { openAll: function (v) { OPEN_ALL = !!v; }, gardropRig: gardropRig, canGardropRig: canGardropRig, grig: GRIG, /* v10.13 test */ help: showHelp, app: APP, /* v10.01 test */ composeChar: composeChar, charLayers: charLayers, act: ACT, actionState: actionState, playIntroAt: playIntroAt, rigOf: rigOf, /* v10.07 test: gösteri vitrini */ useActionSkin: useActionSkin, playActionFx: playActionFx, zaferCheck: zaferCheck, soc: SOC, showFriends: showFriends, showDM: showDM, socConnect: socConnect, dmClose: dmClose, interState: interState, leaderboard: showLeaderboard, profile: showProfile, acc: ACC, peek: PEEK, skin: SKIN, endPrep: endPrep, accBoot: accBoot, tutRig: function () { return tutRig; }, tut: function () { return tutorial ? { mod: TUT_MODULES[tutorial.mod].id, step: tutorial.step, wait: curStep() && curStep().wait, text: $('coachText').textContent } : null; }, modules: TUT_MODULES, startModule: startModule, hub: showTutHub, tryLandscape: tryLandscape, sizeScene: sizeScene, rooms: ROOMS, lobby: showLobby, login: showLogin, tables: showTables, level: levelInfo, intro: showHandIntro, themes: THEMES, applyTheme: applyTheme, net: NET, peek: PEEK, requestPeek: requestPeek, slapHappened: slapHappened, startPrep: startPrep, endPrep: endPrep, skinCount: skinCount, freeLeft: freeLeft, useFreeSkin: useFreeSkin, wardrobe: function () { return wardrobe; }, tutIncoming: tutIncoming, openSkinMenu: openSkinMenu, meldDetail: showMeldDetail, sort: autoSort, insert: insertInRack, setRackRaw: function (r) { rack = r.slice(); render(); }, rack: function () { return rack.slice(); }, openSel: function () { return OPEN_SEL; }, candsOf: candsOf, layp: LAYP, humanError: humanError, render: render, sel: function () { return sel; },  state: function () { return G; }, setRack: function (ids) { rack = ids.slice(); syncRack(false); render(); }, taskSegments: taskSegments, rackSegments: rackSegments, rig: function (fn) { clearTimeout(botTimer); fn(G); syncRack(false); render(); }, tileById: tileById, CATALOG: CATALOG, showStore: showStore, showLobby: showLobby, showCreator: showCreator, effectiveAvatar: effectiveAvatar, normAvatar: normAvatar, api: api, accBody: accBody };
+  window.AO = { openAll: function (v) { OPEN_ALL = !!v; }, peekAnim: peekAnim, slapAnim: slapAnim, botLook: botLook, /* v10.16 test */ gardropRig: gardropRig, canGardropRig: canGardropRig, grig: GRIG, /* v10.13 test */ help: showHelp, app: APP, /* v10.01 test */ composeChar: composeChar, charLayers: charLayers, act: ACT, actionState: actionState, playIntroAt: playIntroAt, rigOf: rigOf, /* v10.07 test: gösteri vitrini */ useActionSkin: useActionSkin, playActionFx: playActionFx, zaferCheck: zaferCheck, soc: SOC, showFriends: showFriends, showDM: showDM, socConnect: socConnect, dmClose: dmClose, interState: interState, leaderboard: showLeaderboard, profile: showProfile, acc: ACC, peek: PEEK, skin: SKIN, endPrep: endPrep, accBoot: accBoot, tutRig: function () { return tutRig; }, tut: function () { return tutorial ? { mod: TUT_MODULES[tutorial.mod].id, step: tutorial.step, wait: curStep() && curStep().wait, text: $('coachText').textContent } : null; }, modules: TUT_MODULES, startModule: startModule, hub: showTutHub, tryLandscape: tryLandscape, sizeScene: sizeScene, rooms: ROOMS, lobby: showLobby, login: showLogin, tables: showTables, level: levelInfo, intro: showHandIntro, themes: THEMES, applyTheme: applyTheme, net: NET, peek: PEEK, requestPeek: requestPeek, slapHappened: slapHappened, startPrep: startPrep, endPrep: endPrep, skinCount: skinCount, freeLeft: freeLeft, useFreeSkin: useFreeSkin, wardrobe: function () { return wardrobe; }, tutIncoming: tutIncoming, openSkinMenu: openSkinMenu, meldDetail: showMeldDetail, sort: autoSort, insert: insertInRack, setRackRaw: function (r) { rack = r.slice(); render(); }, rack: function () { return rack.slice(); }, openSel: function () { return OPEN_SEL; }, candsOf: candsOf, layp: LAYP, humanError: humanError, render: render, sel: function () { return sel; },  state: function () { return G; }, setRack: function (ids) { rack = ids.slice(); syncRack(false); render(); }, taskSegments: taskSegments, rackSegments: rackSegments, rig: function (fn) { clearTimeout(botTimer); fn(G); syncRack(false); render(); }, tileById: tileById, CATALOG: CATALOG, showStore: showStore, showLobby: showLobby, showCreator: showCreator, effectiveAvatar: effectiveAvatar, normAvatar: normAvatar, api: api, accBody: accBody };
   sizeScene(); setTimeout(sizeScene, 300);
   ['app', 'stage', 'rackWrap'].forEach(function (id) { $(id).addEventListener('scroll', function () { $(id).scrollTop = 0; $(id).scrollLeft = 0; }); });
   function resettle() { sizeScene(); setTimeout(sizeScene, 120); setTimeout(function () { sizeScene(); if (G && G.phase !== 'handover') renderRack(); }, 450); } // yön değişimi / çubuk açılıp kapanması: birkaç adımda yeniden hesapla

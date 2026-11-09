@@ -27,6 +27,7 @@ Dosya modu testleri `web/test.html` (build.sh → wrap.sh sonrası) üzerinde ko
 | qa_online_ui.js | iki tarayıcı (telefon EN + masaüstü TR) + 2 bot: arkadaşlık kodla, DM çevrilmez, kıraathane kur/cephe/iç/dükkân/üretim/Keşfet, 1 el baştan sona, iki dilde sonuç, EN kalıntı taraması | 17 |
 | qa_online_match.js | 6 el arkadaş odası gerçek hamlelerle; 2. elde sayfa yenileme → "Masaya dön" aynı koltuk; maç sonu ödül/XP; rövanş evet/evet → bekleme odası → aynı grupla yeni maç; maç ortasında çıkış → bot devralır; /olcum | 13 |
 | qa_server_econ.js | Bronz masa: seviye kilidi, yetersiz altın, emanet, 3 gizli bot (zayıf), AFK → hükmen, emanet kapanışı; Usta kapalı; rövanş hayır; günlük ödül bir kez; /api/buy tx tekrarı; uygunsuz ad; şikâyet/yönetim/engel; davet; /api/lig; IAP webhook reddi | 28 |
+| qa_skin_rig.js | v10.16: botlar (Ali/Ayşe/Mehmet) gardırop karakteri ve parçalı — koltuk, portre, profil kartı, çevrim içi oda; bakış (baş/gövde hedefe döner, süre boyunca tutulur, bitince beklemeye döner), tokat (kol savrulur, yiyenin başı savrulur), Zafer/Tos rig'de bütün resmi kaydırmaz; kendi skininde portre kırpımı genişler; hareket azaltma; masaüstü + telefon | 35 |
 | pkg_smoke.sh | pkg/ paketi: zip parçaları, require, sunucu açılışı, /durum, /api/guest, katalog | 17 |
 
 ## Bilinen tasarım gerçekleri (test beklentileri buna göre)
