@@ -11,8 +11,8 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: '22' }   # v10.19: Capacitor 8 komut satırı Node 22 ister
       - name: Bağımlılıklar
         working-directory: mobile
@@ -41,7 +41,7 @@ jobs:
         run: |
           mkdir -p out
           { echo "sürüm $(cat mobile/version.txt) kod $(cat mobile/versioncode.txt) commit ${{ github.sha }} derleme #${{ github.run_number }}"; echo "--- Info.plist ---"; plutil -p mobile/ios/App/App/Info.plist; echo "--- eklentiler (kurulan sürümler) ---"; (cd mobile && npm ls --depth=0 2>/dev/null | grep -E '@capacitor|@revenuecat'); echo "--- Podfile.lock (Capacitor / RevenueCat / Google reklam) ---"; grep -E 'Capacitor|RevenueCat|Purchases|Google-Mobile-Ads-SDK|GoogleUserMessagingPlatform|Admob' mobile/ios/App/Podfile.lock | head -40; echo "--- v10.19: reklam kimliği ve ağ listesi ---"; /usr/libexec/PlistBuddy -c 'Print :GADApplicationIdentifier' mobile/ios/App/App/Info.plist; echo "SKAdNetworkItems: $(/usr/libexec/PlistBuddy -c 'Print :SKAdNetworkItems' mobile/ios/App/App/Info.plist | grep -c skadnetwork)"; echo "--- uygulama simgesi (alfa olmamalı) ---"; for f in mobile/ios/App/App/Assets.xcassets/AppIcon.appiconset/*.png; do echo "$(basename "$f"): $(sips -g hasAlpha -g pixelWidth "$f" | tail -2 | tr -s ' \n' ' ')"; done; echo "--- en düşük iOS sürümü ---"; grep -m1 'platform :ios' mobile/ios/App/Podfile; grep -m2 'IPHONEOS_DEPLOYMENT_TARGET' mobile/ios/App/App.xcodeproj/project.pbxproj; echo "--- derleme çıktısı ---"; ls -la mobile/ios/App/build 2>/dev/null || true; find ~/Library/Developer/Xcode/DerivedData -name 'App.app' -maxdepth 6 2>/dev/null | head -3; } > out/ios-build-info.txt 2>&1 || true
-          cat out/ios-build-info.txt | head -150
+          grep -v -i -E 'skadnetwork|^ +[0-9]+ => \{$|^ +\}$' out/ios-build-info.txt | head -260   # reklam ağı listesi (50 satır) günlüğü doldurmasın
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then   # v10.19: deneme dallarındaki derleme sürüm sayfasını değiştirmez
             gh release view ios-latest >/dev/null 2>&1 || gh release create ios-latest --prerelease --title "iOS derlemesi (son)" --notes "iOS projesi simülatör için derlendi (imzasız). Mağaza paketi için Apple hesabı + imza sırları gerekir."
             gh release upload ios-latest out/ios-build-info.txt --clobber
