@@ -9,7 +9,7 @@ for f in README.md accounts.js bots.js economy.js engine.js iap.js moderation.js
 git add -A
 git -c user.name="Döngü" -c user.email="dongu@users.noreply.github.com" commit -q -m "$V: $MSG
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_019Lt6xGFxABfQnrFWcbi5x2" || { echo "değişiklik yok"; exit 0; }
 git push -q origin HEAD:main
 git log -1 --format='%h %ci %s'

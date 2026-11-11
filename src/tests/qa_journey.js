@@ -17,7 +17,8 @@ const L = require('./qa_lib.js');
   u = await L.ui(page); ok(u.screen === 'lobby', 'Doğrudan Oyna → lobi', u.screen);
   const lobby = await page.evaluate(() => ({ rooms: document.querySelectorAll('.rcard').length, sel: (document.querySelector('.rcard.sel') || {}).dataset && document.querySelector('.rcard.sel').dataset.room, nav: Array.from(document.querySelectorAll('[id^=nav-]')).map((e) => e.id) }));
   ok(lobby.rooms === 13 && lobby.sel === 'koy', 'lobide 13 oda kartı, Köy Meydanı seçili', JSON.stringify(lobby));
-  const navs = [['nav-arkadas', 'toast'], ['nav-kiraathane', 'toast'], ['nav-lider', '#lgClose'], ['nav-bonus', '#qClose'], ['nav-reklam', 'toast'], ['nav-magaza', '#sClose'], ['nav-ogren', '#thClose'], ['nav-bilgi', '#helpClose'], ['nav-ayar', '#helpClose'], ['lbProfile', '#pfClose'], ['lbShop', '#sClose'], ['lbPlus', '#sClose']];
+  const navs = [['nav-arkadas', 'toast'], ['nav-kiraathane', 'toast'], ['nav-lider', '#lgClose'], ['nav-bonus', '#qClose'], ['nav-magaza', '#sClose'], ['nav-ogren', '#thClose'], ['nav-bilgi', '#helpClose'], ['nav-ayar', '#helpClose'], ['lbProfile', '#pfClose'], ['lbShop', '#sClose'], ['lbPlus', '#sClose']];
+  ok(!(await page.$('#nav-reklam')) && (await page.$$('.lnav .soon')).length === 0, 'lobide "Yakında" yazan çalışmayan düğme yok (v10.18: Altın Kazan yer tutucusu kaldırıldı)');
   for (const [id, closer] of navs) {
     await page.click('#' + id); await page.waitForTimeout(450);
     const after = await L.ui(page);

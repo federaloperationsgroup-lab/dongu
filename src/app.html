@@ -912,6 +912,14 @@ html[lang="en"] .item .newtag::after { content: 'NEW'; display: block; padding: 
 /* v10.01 (K134): yasal onay, hesap bölümü, yönetici bildirimi */
 .card.consentwin { max-width: 620px; } .consent { display: flex; gap: 10px; align-items: flex-start; text-align: left; font-size: 14px; line-height: 1.35; margin: 10px 0; padding: 10px 12px; background: rgba(0,0,0,.25); border-radius: 10px; cursor: pointer; }
 .consent input { width: 20px; height: 20px; flex: none; margin-top: 1px; }
+/* v10.18: Başlangıç Paketi teklifi, hesap kurtarma kodu, lobi hediye işareti */
+.card.offerwin { max-width: 560px; } .offer { display: flex; align-items: center; gap: 16px; justify-content: center; margin: 10px 0 12px; padding: 14px 16px; background: radial-gradient(ellipse at 50% 30%, rgba(107,74,18,.75), rgba(42,28,8,.75)); border: 1px solid rgba(255,210,120,.35); border-radius: 14px; }
+.offer img { width: 96px; height: 96px; flex: none; border-radius: 50%; box-shadow: 0 0 0 3px rgba(255,210,120,.5); } .offer b { font-size: 18px; line-height: 1.3; color: var(--gold-2); text-align: left; }
+.card.recwin { max-width: 600px; } .reccode { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 30px; font-weight: 700; letter-spacing: 3px; text-align: center; color: var(--gold-2); background: rgba(0,0,0,.3); border-radius: 12px; padding: 12px 10px; margin: 6px 0 10px; user-select: all; -webkit-user-select: all; }
+.recwin input[type=text] { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 22px; letter-spacing: 2px; text-align: center; text-transform: uppercase; margin: 6px 0 10px; }
+.login .recbtn { position: absolute; left: 800px; top: 770px; transform: translateX(-50%); font-size: 22px; min-height: 52px; padding: 6px 26px; border-radius: 26px; background: rgba(0,0,0,.45); color: #fff; border: 1px solid rgba(255,255,255,.3); z-index: 5; white-space: nowrap; }
+.nav .gift { position: absolute; right: -8px; top: -10px; font-style: normal; font-size: 26px; line-height: 1; pointer-events: none; animation: pulse 1.4s ease-in-out infinite; }
+.setting small.shint { display: block; font-size: 11px; opacity: .7; font-weight: 400; }
 .note a, .consent a, .noticeTxt a { color: #8fc6ff; } .note.legal { margin-top: 10px; font-size: 12px; opacity: .8; text-align: center; }
 button.danger { filter: hue-rotate(140deg) saturate(1.3); } button.primary.danger { filter: hue-rotate(150deg) saturate(1.6); }
 .noticeTxt { text-align: left; background: rgba(0,0,0,.25); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
