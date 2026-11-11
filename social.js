@@ -138,7 +138,7 @@ function rewriteReports(mapFn, cb) { // dosya modu: şikâyet dosyasını (kapat
     try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(path.join(DATA, 'reports.jsonl'), lines.length ? lines.join('\n') + '\n' : ''); cb(null); } catch (e2) { cb(e2); } });
 }
 function exportAccount(me, cb) { // "Verilerimi indir": hesap kaydı (anahtar hariç), arkadaşlar, engeller, bütün mesajlar
-  var acc = Object.assign({}, me); delete acc.token;
+  var acc = Object.assign({}, me); delete acc.token; delete acc.rec; // v10.18: kurtarma kodu da anahtar gibi gizlidir, indirilen dosyaya girmez
   listRels(me.id, function (e, rels) { if (e) return cb(e);
     listBlocks(me.id, function (e2, blocks) { if (e2) return cb(e2);
       allMsgs(me.id, function (e3, msgs) { if (e3) return cb(e3);

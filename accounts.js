@@ -24,6 +24,7 @@ function init(opts, cb) {
     DB = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 5 });
     DB.query('CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())')
       .then(function () { return DB.query('CREATE TABLE IF NOT EXISTS match_log (id SERIAL PRIMARY KEY, at TIMESTAMPTZ DEFAULT now(), data JSONB NOT NULL)'); }) // v9.76 ölçüm: el/maç kayıtları
+      .then(function () { return DB.query("CREATE INDEX IF NOT EXISTS players_rec ON players ((data->>'rec'))").catch(function () {}); }) // v10.18: kurtarma koduyla arama
       .then(function () { mode = 'postgres'; wipeIfRequested(function () { cb(null, mode); }); })
       .catch(function (e) { DB = null; fileMode(cb, e.message); });
   } else fileMode(cb, null);
@@ -236,9 +237,50 @@ function buy(body, cb) {
     if (p.owned.indexOf(c.id) >= 0) return fin(null, { player: publicView(p), already: true });
     var needLv = Economy.itemLevel(c.id), myLv = levelOf(p.xp).level; if (needLv && myLv < needLv) return fin(new Error(c.name + ' seviye ' + needLv + ' olunca açılır (sen: seviye ' + myLv + ').')); // v9.86: seviyeyle açılan kostüm
     var price = c.free ? 0 : (c.price || 0);
-    if (p.coins < price) return fin(new Error('Yeterli jeton yok.'));
+    if (p.coins < price) return fin(new Error('Yeterli altın yok.')); // v10.18: "jeton" yazıyordu (para birimi altın)
     p.coins -= price; p.owned.push(c.id); if (tx) p.txs = (p.txs || []).concat([tx]).slice(-20); if (Economy.charOf(c.id)) p.charMig = 1; // v9.88: satın alınmış karakteri geçiş temizliği asla silmez
     fin(null, function () { return { player: publicView(p) }; }, true);
+  });
+}
+// ---- v10.18: hesap kurtarma kodu. Misafir hesabı yalnız cihazdaki anahtarla tanınır; uygulama silinir ya da telefon değişirse hesap (ve satın alınan altın)
+// kaybolurdu. Oyuncu Ayarlar'dan kodunu görür; giriş ekranında "Hesabımı geri yükle" ile kodu yazan cihaz aynı hesaba bağlanır (aynı anahtar: iki cihaz da girebilir).
+// Kod, hesap anahtarı kadar gizlidir (kodu bilen hesaba girer): "Kodu yenile" kodu VE hesap anahtarını değiştirir → öteki cihazlardaki oturum düşer.
+// Kod 12 karakter (karışan I, L, O, 0, 1 yok; ~59 bit). Deneme sınırı: IP başına 10 dakikada RECOVER_MAX (8).
+var REC_ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function newRecCode() { var s = ''; while (s.length < 12) { var b = crypto.randomBytes(24); for (var i = 0; i < b.length && s.length < 12; i++) if (b[i] < 248) s += REC_ALPHA[b[i] % 31]; } return s.slice(0, 4) + '-' + s.slice(4, 8) + '-' + s.slice(8); }
+function normRec(c) { var s = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); if (s.length !== 12) return ''; for (var i = 0; i < 12; i++) if (REC_ALPHA.indexOf(s[i]) < 0) return ''; return s.slice(0, 4) + '-' + s.slice(4, 8) + '-' + s.slice(8); }
+function findByRec(code, cb) {
+  if (DB) return DB.query("SELECT data FROM players WHERE data->>'rec' = $1 LIMIT 1", [code]).then(function (r) { cb(null, r.rows[0] ? r.rows[0].data : null); }).catch(cb);
+  var hit = null; Object.keys(mem).some(function (k) { if (mem[k] && mem[k].rec === code) { hit = mem[k]; return true; } return false; }); cb(null, hit);
+}
+function recoveryGet(body, cb) { // POST /api/recovery/get {id, token} → {code}; ilk istekte üretilir, sonra aynı kod
+  lockedAuth(body, cb, function (p, fin) {
+    if (p.bot) return fin(new Error('Bu hesap için kurtarma kodu yok.'));
+    if (p.rec) return fin(null, { code: p.rec });
+    p.rec = newRecCode(); p.recAt = Date.now(); fin(null, function () { return { code: p.rec }; }, true);
+  });
+}
+function recoveryRotate(body, cb) { // POST /api/recovery/rotate {id, token} → {code, token}: yeni kod + yeni hesap anahtarı (eski kod ve öteki cihazlar geçersiz)
+  lockedAuth(body, cb, function (p, fin) {
+    if (p.bot) return fin(new Error('Bu hesap için kurtarma kodu yok.'));
+    p.rec = newRecCode(); p.recAt = Date.now(); p.token = newToken();
+    fin(null, function () { return { code: p.rec, token: p.token }; }, true);
+  });
+}
+var recTries = {}, REC_WINDOW = 600000, REC_MAX = parseInt(process.env.RECOVER_MAX) || 8;
+function clientIp(req) { var f = req && req.headers && (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']); if (f) return String(f).split(',')[0].trim(); return (req && req.socket && req.socket.remoteAddress) || '?'; }
+function recover(body, cb, req) { // POST /api/recover {code} → {id, token, player}
+  var ip = clientIp(req), now = Date.now(); if (Object.keys(recTries).length > 5000) recTries = {};
+  var t = recTries[ip] = (recTries[ip] || []).filter(function (x) { return now - x < REC_WINDOW; });
+  if (t.length >= REC_MAX) return cb(new Error('Çok fazla deneme yapıldı; 10 dakika sonra yeniden dene.'));
+  t.push(now);
+  var code = normRec(body && body.code); if (!code) return cb(new Error('Kod 12 karakter olmalı (ör. ABCD-EFGH-JKMN).'));
+  findByRec(code, function (e, hit) { if (e) return cb(e);
+    if (!hit || hit.bot) return cb(new Error('Bu kodla bir hesap bulunamadı. Kodu kontrol et.'));
+    withLock(hit.id, function (release) { get(hit.id, function (e2, p) {
+      if (e2 || !p || p.rec !== code) { release(); return cb(e2 || new Error('Bu kodla bir hesap bulunamadı. Kodu kontrol et.')); }
+      recTries[ip] = []; p.recUsed = (p.recUsed || 0) + 1; p.recUsedAt = now;
+      put(p, function (e3) { release(); if (e3) return cb(e3); console.log('hesap kurtarma: ' + p.id + ' (' + p.recUsed + '. kez)'); cb(null, { id: p.id, token: p.token, player: publicView(p) }); }); }); });
   });
 }
 function grant(acc, fn, cb) { // sunucu içi: oyuncuyu doğrula (id+token), fn ile değiştir (Economy.* çağrıları fn içinde), kaydet; fn hata atarsa kayıt değişmez. v9.86: hesap kilidi altında
@@ -384,9 +426,9 @@ function handleHttp(req, res, url) {
       res.writeHead(e ? 400 : 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(e ? { error: e.message } : out));
     };
-    var fn = { '/api/guest': create, '/api/me': me, '/api/bonus': bonus, '/api/buy': buy, '/api/result': result, '/api/tutorial': tutorial, '/api/skinuse': skinUse, '/api/lig': leaderboard }[url];
+    var fn = { '/api/guest': create, '/api/me': me, '/api/bonus': bonus, '/api/buy': buy, '/api/result': result, '/api/tutorial': tutorial, '/api/skinuse': skinUse, '/api/lig': leaderboard, '/api/recovery/get': recoveryGet, '/api/recovery/rotate': recoveryRotate, '/api/recover': recover }[url]; // v10.18: kurtarma kodu
     if (!fn) { for (var i = 0; i < routes.length; i++) if (url.indexOf(routes[i].prefix) === 0) { try { routes[i].fn(url, body, done); } catch (ex) { done(ex); } return; } res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"yok"}'); return; }
-    fn(body, done);
+    fn(body, done, req);
   });
   return true;
 }
