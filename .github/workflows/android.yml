@@ -11,11 +11,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: '21' }
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+      - uses: actions/setup-node@v5
+        with: { node-version: '22' }   # v10.19: Capacitor 8 komut satırı Node 22 ister
       - name: Bağımlılıklar
         working-directory: mobile
         run: npm install --no-audit --no-fund
@@ -42,7 +42,8 @@ jobs:
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk out/dongu-debug-$(cat mobile/version.txt).apk
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk out/dongu.apk   # sabit ad: .../releases/download/android-latest/dongu.apk hep son sürüm
           cp mobile/android/app/build/outputs/bundle/release/app-release.aab out/dongu-release-unsigned-$(cat mobile/version.txt).aab
-          { echo "sürüm $(cat mobile/version.txt) kod $(cat mobile/versioncode.txt) commit ${{ github.sha }} derleme #${{ github.run_number }}"; echo "--- AndroidManifest (MainActivity) ---"; tr '\n' ' ' < mobile/android/app/src/main/AndroidManifest.xml | grep -o '<activity[^>]*MainActivity[^>]*' | tr ' ' '\n' | grep -E 'screenOrientation|android:name|configChanges|launchMode' ; echo "--- build.gradle ---"; grep -E 'versionCode|versionName|applicationId' mobile/android/app/build.gradle; echo "--- styles.xml ---"; grep -E 'windowFullscreen|NoActionBarLaunch' mobile/android/app/src/main/res/values/styles.xml; echo "--- izinler ---"; grep -o 'uses-permission[^/]*' mobile/android/app/src/main/AndroidManifest.xml; echo "--- www ---"; find mobile/www -type f | wc -l; grep -o "VERSION = '[0-9.]*'" mobile/www/index.html | head -1; grep -c "window.DONGU_CONFIG" mobile/www/index.html; echo "--- APK imzası ---"; "$(ls -d $ANDROID_HOME/build-tools/* | tail -1)/apksigner" verify --print-certs out/dongu.apk | grep -i 'SHA-256'; } > out/build-info.txt 2>&1 || true
+          { echo "sürüm $(cat mobile/version.txt) kod $(cat mobile/versioncode.txt) commit ${{ github.sha }} derleme #${{ github.run_number }}"; echo "--- AndroidManifest (MainActivity) ---"; tr '\n' ' ' < mobile/android/app/src/main/AndroidManifest.xml | grep -o '<activity[^>]*MainActivity[^>]*' | tr ' ' '\n' | grep -E 'screenOrientation|android:name|configChanges|launchMode' ; echo "--- build.gradle ---"; grep -E 'versionCode|versionName|applicationId' mobile/android/app/build.gradle; echo "--- styles.xml ---"; grep -E 'windowFullscreen|NoActionBarLaunch' mobile/android/app/src/main/res/values/styles.xml; echo "--- izinler (kaynak) ---"; grep -o 'uses-permission[^/]*' mobile/android/app/src/main/AndroidManifest.xml; echo "--- v10.19: reklam kimliği, oyun kategorisi, büyük ekran ---"; grep -o 'appCategory="[^"]*"\|com.google.android.gms.ads.APPLICATION_ID" android:value="[^"]*"\|PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY" android:value="[^"]*"' mobile/android/app/src/main/AndroidManifest.xml; echo "--- SDK düzeyleri (variables.gradle) ---"; grep -E 'minSdkVersion|compileSdkVersion|targetSdkVersion' mobile/android/variables.gradle; echo "--- eklentiler (kurulan sürümler) ---"; (cd mobile && npm ls --depth=0 2>/dev/null | grep -E '@capacitor|@revenuecat'); echo "--- APK'dan okunan (aapt2) ---"; AAPT="$(ls -d $ANDROID_HOME/build-tools/* | tail -1)/aapt2"; "$AAPT" dump badging out/dongu.apk | grep -E "^package:|^sdkVersion|^targetSdkVersion|^uses-permission|^application-label:"; "$AAPT" dump xmltree --file AndroidManifest.xml out/dongu.apk | grep -E "appCategory|APPLICATION_ID|RESTRICTED_RESIZABILITY|screenOrientation" | head -8; echo "--- www ---"; find mobile/www -type f | wc -l; grep -o "VERSION = '[0-9.]*'" mobile/www/index.html | head -1; grep -c "window.DONGU_CONFIG" mobile/www/index.html; echo "--- APK imzası ---"; "$(ls -d $ANDROID_HOME/build-tools/* | tail -1)/apksigner" verify --print-certs out/dongu.apk | grep -i 'SHA-256'; } > out/build-info.txt 2>&1 || true
+          cat out/build-info.txt   # v10.19: günlükte de görünsün (deneme dalı derlemelerinde sürüm sayfasına yüklenmez)
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
@@ -50,11 +51,12 @@ jobs:
           path: "out/"
           retention-days: 30
       - name: Sürüm sayfasına koy (android-latest; telefondan doğrudan indirilebilir)
+        if: github.ref == 'refs/heads/main'   # v10.19: deneme dallarındaki derleme testerların indirdiği sürüm sayfasını değiştirmez (çıktı yalnız iş akışı ekinde kalır)
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           V=$(cat mobile/version.txt)
           gh release view android-latest >/dev/null 2>&1 || gh release create android-latest --prerelease --title "Android derlemesi (son)" --notes "GitHub Actions'ın her yüklemede ürettiği Android paketleri. APK: telefona doğrudan kurulur (bilinmeyen kaynaklara izin). AAB: Play Console için (imzalanır)."
           # eski sürümlerin dosyalarını temizle (sürüm sayfasında yalnız son derleme kalsın)
-          for a in $(gh release view android-latest --json assets --jq '.assets[].name'); do case "$a" in *"-$V."*|build-info.txt|dongu.apk) ;; *) gh release delete-asset android-latest "$a" -y || true;; esac; done
+          for a in $(gh release view android-latest --json assets --jq '.assets[].name'); do case "$a" in *"-$V."*|build-info.txt|dongu.apk|dongu-debug-10.18.apk) ;; *) gh release delete-asset android-latest "$a" -y || true;; esac; done   # dongu-debug-10.18.apk: eski kabuklu (Capacitor 7) son sürüm; yeni kabuk gerçek telefonda doğrulanana kadar yedek olarak durur
           gh release upload android-latest out/* --clobber
           gh release edit android-latest --notes "Sürüm $V · derleme #${{ github.run_number }} · $(date -u +%Y-%m-%dT%H:%MZ) · commit ${{ github.sha }}. APK telefona doğrudan kurulur; AAB Play Console için (imzalanır)."

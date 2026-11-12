@@ -1,25 +1,26 @@
 {
   "name": "dongu-mobile",
-  "version": "10.3.0",
+  "version": "10.19.0",
   "private": true,
-  "description": "Döngü — Android ve iOS mağaza uygulaması (Capacitor). Web paketi www/ içine public.zip + assets.zip'ten açılır; sunucu dongu.app.",
+  "description": "Döngü — Android ve iOS mağaza uygulaması (Capacitor 8). Web paketi www/ içine public.zip + assets.zip'ten açılır; sunucu dongu.app.",
   "scripts": {
     "www": "sh prepare-www.sh",
     "add:android": "npx cap add android && sh patch-native.sh android",
-    "add:ios": "npx cap add ios && sh patch-native.sh ios",
+    "add:ios": "npx cap add ios --packagemanager CocoaPods && sh patch-native.sh ios",
     "icons": "npx @capacitor/assets generate --iconBackgroundColor '#0f1430' --iconBackgroundColorDark '#0f1430' --splashBackgroundColor '#0f1430' --splashBackgroundColorDark '#0f1430'"
   },
   "dependencies": {
-    "@capacitor/android": "^7.0.0",
-    "@capacitor/app": "^7.0.0",
-    "@capacitor/core": "^7.0.0",
-    "@capacitor/ios": "^7.0.0",
-    "@capacitor/splash-screen": "^7.0.0",
-    "@capacitor/status-bar": "^7.0.0",
-    "@revenuecat/purchases-capacitor": "^10.0.0"
+    "@capacitor-community/admob": "^8.0.0",
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0",
+    "@revenuecat/purchases-capacitor": "^12.0.3"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
-    "@capacitor/cli": "^7.0.0"
+    "@capacitor/cli": "^8.0.0"
   }
 }

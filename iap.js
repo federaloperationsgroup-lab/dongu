@@ -144,5 +144,5 @@ function list(cb) {
   if (DB) return DB.query('SELECT tx, player, product, store, price, currency, at, status FROM purchases ORDER BY at DESC LIMIT 200').then(function (r) { cb(null, r.rows.map(function (x) { x.at = parseInt(x.at, 10); x.price = x.price == null ? null : parseFloat(x.price); return x; })); }).catch(cb);
   cb(null, mem.slice().sort(function (a, b) { return b.at - a.at; }).slice(0, 200));
 }
-function configured() { return { secret: !!SECRET, webhook: !!WEBHOOK }; }
+function configured() { return { secret: !!SECRET, webhook: !!WEBHOOK, sandbox: SANDBOX_OK }; }
 module.exports = { PRODUCTS: PRODUCTS, products: products, init: init, credit: credit, refund: refund, webhook: webhook, sync: sync, list: list, configured: configured };

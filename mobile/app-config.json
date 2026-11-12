@@ -1,1 +1,12 @@
-{ "rcAndroid": "", "rcIos": "", "note": "RevenueCat herkese açık SDK anahtarları (Project → API keys → Google Play / App Store). Boşsa uygulamada Altın Al sekmesi listelenir ama satın alma düğmeleri 'uygulamada' uyarısı verir." }
+{
+  "rcAndroid": "",
+  "rcIos": "",
+  "admob": {
+    "test": true,
+    "appIdAndroid": "ca-app-pub-3940256099942544~3347511713",
+    "appIdIos": "ca-app-pub-3940256099942544~1458002511",
+    "rewardedAndroid": "ca-app-pub-3940256099942544/5224354917",
+    "rewardedIos": "ca-app-pub-3940256099942544/1712485313"
+  },
+  "note": "rcAndroid / rcIos: RevenueCat herkese açık SDK anahtarları (Project → API keys → Google Play / App Store); boşsa Altın Al sekmesi listelenir ama satın alma düğmeleri 'uygulamada' uyarısı verir. admob: şu anki değerler Google'ın herkese açık DENEME kimlikleridir (gerçek reklam ve gelir yok, 'Test Ad' yazar). Mağazaya çıkmadan önce AdMob hesabındaki gerçek uygulama kimlikleri (appId…, içinde ~ olan) ve ödüllü reklam birimi kimlikleri (rewarded…, içinde / olan) yazılır ve test false yapılır. Bu kimlikler gizli değildir. rewarded… boşsa oyunda Altın Kazan düğmesi çıkmaz."
+}
