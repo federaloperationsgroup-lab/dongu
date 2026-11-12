@@ -6,7 +6,7 @@ const S = require('./qa_srv.js'); const Economy = require('/home/claude/okey/eco
 const PORT = 8768, KEY = 'test-anahtar-68', LOG = '/tmp/qa_server_econ.srv.log';
 (async () => {
   let pass = 0, fail = 0; const ok = (c, n, x) => { c ? pass++ : fail++; console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? ' :: ' + String(x).slice(0, 400) : '')); };
-  const srv = S.start(PORT, { ADMIN_KEY: KEY, QUICK_WAIT: '1500', PREP_MS: '1500', PREP_FIRST_MS: '1500', BOT_DELAY: '60', NEXT_DELAY: '500', RESULT_GAP_MS: '300', TURN_MS: '400', PAID_WAIT: '1500', REMATCH_WAIT: '4000' }, LOG); await S.up(PORT, LOG, true);
+  const srv = S.start(PORT, { ADMIN_KEY: KEY, QUICK_WAIT: '1500', PREP_MS: '1500', PREP_FIRST_MS: '1500', BOT_DELAY: '60', NEXT_DELAY: '500', RESULT_GAP_MS: '300', TURN_MS: '400', PAID_WAIT: '1500', REMATCH_WAIT: '4000', CLAIM_MS: '500' }, LOG); /* CLAIM_MS (v10.19): AFK oyuncunun her "Al / Geç" hakkında 8 sn yerine 0,5 sn beklenir → el her dağıtımda saniyeler içinde biter */ await S.up(PORT, LOG, true);
   const durum = (await S.get(PORT, '/durum')).body; ok(/Sürüm: v10\.\d\d\./.test(durum) && /Hesap deposu/.test(durum), '/durum sürüm satırı', durum.slice(0, 120));
   const me = async (acc) => { const j = (await S.post(PORT, '/api/me', { id: acc.id, token: acc.token })).json; return { player: j && j.player ? j.player : j }; };
   // hesaplar
@@ -32,7 +32,7 @@ const PORT = 8768, KEY = 'test-anahtar-68', LOG = '/tmp/qa_server_econ.srv.log';
   await S.sleep(300); const mid = await me(A); ok(mid.player.coins === coinsA0 - 100, 'giriş emanete alındı: ' + coinsA0 + ' → ' + mid.player.coins);
   let lg = ''; for (let i = 0; i < 100; i++) { lg = require('fs').readFileSync(LOG, 'utf8'); if (lg.indexOf('oyun ba\u015flad\u0131') >= 0) break; await S.sleep(150); }
   ok((lg.match(/\(gizli bot\)/g) || []).length >= 3 && /bahisli masa: gizli botlar zayıf/.test(lg), 'masa 3 gizli botla doldu, oyun başladı (bahisli masada zayıf botlar)', lg.split('\n').filter((l) => /gizli bot|başladı/.test(l)).slice(-4).join(' | '));
-  const t0 = Date.now(); let fin = null; while (Date.now() - t0 < 480000 && !fin) { /* v10.18: 180 → 480 sn. AFK oyuncuya her "Al / Geç" hakkında 8 sn beklenir; el uzarsa (14+ tur) 180 sn yetmiyordu (oyun takılmıyor, yalnız yavaş) */ fin = a.msgs.find((m) => m.t === 'state' && m.view && (m.view.finished || m.view.handOver)) || null; if (!fin) await S.sleep(200); }
+  const t0 = Date.now(); let fin = null; while (Date.now() - t0 < 480000 && !fin) { /* v10.18: 180 → 480 sn (AFK oyuncuya her "Al / Geç" hakkında 8 sn beklenirken el 180 sn'ye sığmayabiliyordu); v10.19: CLAIM_MS ile el zaten kısa */ fin = a.msgs.find((m) => m.t === 'state' && m.view && (m.view.finished || m.view.handOver)) || null; if (!fin) await S.sleep(200); }
   ok(!!fin, 'el bitti (AFK: sunucu Zengin yerine oynadı)');
   await S.sleep(1200); const rw = a.msgs.filter((m) => m.t === 'reward').pop(); const after = await me(A);
   const pool = Economy.payoutPool ? Economy.payoutPool([100, 100, 100, 100], [1, 2, 3, 4], { participants: [true, false, false, false], forfeits: [true, false, false, false] }) : null;

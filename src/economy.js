@@ -10,7 +10,7 @@
   var __L = (typeof window !== 'undefined' && window.__L) || function (t, a) { if (t.indexOf('{') < 0 && t.indexOf('}') < 0) return t; return t.replace(/\{\{|\}\}|\{(\d+)\}/g, function (m, i) { if (m === '{{') return '{'; if (m === '}}') return '}'; var k = +i; return a && k < a.length ? String(a[k]) : m; }); };
 
   var CONFIG = {
-    version: 'dongu-economy-2.0',           // 2.0 (v10.09, K171–K173): gizli botlu Hızlı Katıl tam ödül + her Sosyal maç lig maçı, ligde Bak serbest, günlük lig sınırı 20, 1 El/12 El lig çarpanı, antrenman XP 15;           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
+    version: 'dongu-economy-2.1',           // 2.1 (v10.19, K208): ödüllü reklam (ads) //           // 2.0 (v10.09, K171–K173): gizli botlu Hızlı Katıl tam ödül + her Sosyal maç lig maçı, ligde Bak serbest, günlük lig sınırı 20, 1 El/12 El lig çarpanı, antrenman XP 15;           // 1.2: belge 1.1 + 12 El ve giriş merdiveni; 1.2.1: kıraathane dekor eşyaları; 1.3: hükmen son / çıkma cezası / botlu bahisli masa havuzu (5 Ekim 2026 kararları); 1.4: mekân açılma kuralları + seviyeyle açılan kostümler (K107); 1.5: lig — Döngü Puanı, aylık sezon (K108; altın/XP değişmedi); 1.6: özel karakterler altın + seviye, karakter sahipliğiyle ücretsiz skinler, Çaktırmadan Bak kullanım paketleri (K110)
     levelCap: 50,
     xp: { base: 100, perLevel: 25 },        // sonraki seviye için XP: 100 + 25·(L−1)
     welcomeGold: 1000,
@@ -24,6 +24,7 @@
     humanCoef: { 2: 0.5, 3: 0.75, 4: 1 },   // masadaki uygun insan sayısı katsayısı; 1 insan = antrenman
     training: { handsPerDay: 5, gold: 4, xp: 15 }, // botlara karşı (tek insan) antrenman: günde ilk 5 el — v10.09 (K173, K107-A): XP 10 → 15
     loginGold: 40,                          // günlük giriş (UTC günü)
+    ads: { gold: 40, dailyMax: 5, cooldownMs: 60000 }, // v10.19 (K208): ödüllü reklam — izlenen her reklam için altın, UTC günü başına en çok dailyMax, iki reklam arası en az cooldownMs
     dailyQuests: [[2, 30, 30], [4, 40, 40], [6, 60, 50]],      // [uygun insan eli, altın, XP] — birikimli
     weeklyQuests: [[24, 200, 150], [48, 300, 200]],
     stakes: [                                // giriş altınlı masalar (el başına; maç = el sayısı × giriş)
@@ -363,6 +364,10 @@
     e.login = true; p.coins = (p.coins || 0) + CONFIG.loginGold;
     return { gold: CONFIG.loginGold };
   }
+  // v10.19 (K208): ödüllü reklam. p.ads = { day, n, last }: o UTC günündeki reklam sayısı ve son ödül zamanı.
+  function adState(p, now) { var d = dayKey(now), a = p.ads; return a && a.day === d ? a : { day: d, n: 0, last: (a && a.last) || 0 }; }
+  function adSummary(p, now) { var c = CONFIG.ads, a = adState(p, now), left = Math.max(0, c.dailyMax - a.n); return { gold: c.gold, max: c.dailyMax, left: left, waitMs: left ? Math.max(0, (a.last || 0) + c.cooldownMs - now) : 0 }; }
+  function adReward(p, now) { var c = CONFIG.ads, a = adState(p, now); if (a.n >= c.dailyMax) return null; a.n++; a.last = now; p.ads = a; p.coins = (p.coins || 0) + c.gold; return { gold: c.gold, left: c.dailyMax - a.n }; }
   function tutorialReward(p, now) {
     if (p.tutorialRewarded) return null; p.tutorialRewarded = true;
     var e = econOf(p, now); p.coins = (p.coins || 0) + CONFIG.tutorial.gold; p.xp = (p.xp || 0) + CONFIG.tutorial.xp;
@@ -490,6 +495,6 @@
     return { total: total, fee: fee, net: net, shares: shares, undistributed: 0 };
   }
 
-  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps, arenaName: arenaName, arenaRule: arenaRule, arenaProgress: arenaProgress, arenaOpen: arenaOpen, syncArenas: syncArenas, itemLevel: itemLevel, charOf: charOf, isActionSkin: isActionSkin, actionSkin: actionSkin, skinUseItem: skinUseItem, charGrants: charGrants, bakCharges: bakCharges, seasonKey: seasonKey, seasonLabel: seasonLabel, seasonEndsAt: seasonEndsAt, prevSeasonKey: prevSeasonKey, leagueOf: leagueOf, leaguePoints: leaguePoints, leagueBase: leagueBase, leagueDelta: leagueDelta, settleLeague: settleLeague, leagueSummary: leagueSummary };
+  return { CONFIG: CONFIG, fmt: fmt, VENUE_ITEMS: VENUE_ITEMS, VENUE_STARTER: VENUE_STARTER, VENUE_GRID: VENUE_GRID, VENUE_GRID_V1: VENUE_GRID_V1, starterLayout: starterLayout, venueItem: venueItem, venueTier: venueTier, cellPos: cellPos, cellAt: cellAt, footprintCells: footprintCells, seatCells: seatCells, validateLayout: validateLayout, findPath: findPath, settleProduction: settleProduction, xpNeed: xpNeed, levelOf: levelOf, cumulativeXp: cumulativeXp, dayKey: dayKey, weekKey: weekKey, nextDayAt: nextDayAt, adSummary: adSummary, adReward: adReward, econOf: econOf, bandRate: bandRate, humanCoef: humanCoef, handReward: handReward, settleHand: settleHand, settleTraining: settleTraining, settleMatch: settleMatch, loginReward: loginReward, tutorialReward: tutorialReward, summary: summary, stakeOf: stakeOf, payoutPool: payoutPool, levelUps: levelUps, arenaName: arenaName, arenaRule: arenaRule, arenaProgress: arenaProgress, arenaOpen: arenaOpen, syncArenas: syncArenas, itemLevel: itemLevel, charOf: charOf, isActionSkin: isActionSkin, actionSkin: actionSkin, skinUseItem: skinUseItem, charGrants: charGrants, bakCharges: bakCharges, seasonKey: seasonKey, seasonLabel: seasonLabel, seasonEndsAt: seasonEndsAt, prevSeasonKey: prevSeasonKey, leagueOf: leagueOf, leaguePoints: leaguePoints, leagueBase: leagueBase, leagueDelta: leagueDelta, settleLeague: settleLeague, leagueSummary: leagueSummary };
 }));
 

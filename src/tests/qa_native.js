@@ -1,13 +1,15 @@
-// Mağaza uygulaması benzetimi (v10.18): sayfa "uygulamanın içindeymiş" gibi açılır (sahte Capacitor + sahte satın alma eklentisi + sahte RevenueCat REST)
+// Mağaza uygulaması benzetimi (v10.18; v10.19: ödüllü reklam — sahte AdMob eklentisi): sayfa "uygulamanın içindeymiş" gibi açılır (sahte Capacitor + sahte satın alma eklentisi + sahte RevenueCat REST)
 // ve gerçek sunucu akışıyla denenir: satın alma kurulumu, mağaza fiyatları, satın alma → altın, vazgeçme, geri yükleme, Başlangıç Paketi teklifi
-// (altın yetmeyince / ilk maçtan sonra / günde bir / 3 kez), lobi (reklam düğmesi yok, hediye işareti), İngilizce. Ayrıca web sürümü: kurtarma kodu
+// (altın yetmeyince / ilk maçtan sonra / günde bir / 3 kez), lobi (hediye işareti), ödüllü reklam (izle → altın, yarıda kapatma, reklam yok, vazgeçme,
+// çift dokunma, olay / bekçi yolları, günlük sınır, bekleme, izin formu, reklam ayarı olmayan paket), İngilizce. Ayrıca web sürümü: kurtarma kodu
 // (Ayarlar → Kodu göster → kopyala/yenile; giriş ekranı → Hesabımı geri yükle), web'de teklif ve hediye işareti yok. PORT 8775, sahte REST 8776.
 const S = require('./qa_srv.js'); const L = require('./qa_lib.js'); const http = require('http'); const fs = require('fs'); const path = require('path');
 const PORT = 8775, RC = 8776, KEY = 'test-anahtar-75', LOG = '/tmp/qa_native.srv.log', OUT = path.join(__dirname, 'out');
 const BASE = 'http://127.0.0.1:' + PORT;
 const PRICES = { baslangic: '₺29,99', altin_kucuk: '₺49,99', altin_orta: '₺129,99', altin_buyuk: '₺299,99', altin_dev: '₺649,99' };
 function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortamı
-  window.DONGU_CONFIG = cfg.config; window.__CAP = { calls: [], next: '' };
+  window.DONGU_CONFIG = cfg.config; window.__CAP = { calls: [], next: '', adL: {}, appL: {}, adNext: '', adMs: 800, consent: false };
+  const fire = (ev, d) => { (window.__CAP.adL[ev] || []).forEach((f) => { try { f(d || {}); } catch (e) {} }); }, RW = { type: 'altin', amount: 1 };
   const pkgs = Object.keys(cfg.prices).map((id) => ({ identifier: id, product: { identifier: id, priceString: cfg.prices[id] } }));
   window.Capacitor = { isNativePlatform: () => true, getPlatform: () => cfg.platform, Plugins: {
     Purchases: {
@@ -15,7 +17,19 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
       getOfferings: () => Promise.resolve({ current: { availablePackages: pkgs }, all: {} }),
       purchaseStoreProduct: (o) => { const id = o.product.identifier; window.__CAP.calls.push(['purchase', id]); if (window.__CAP.next === 'cancel') { window.__CAP.next = ''; return Promise.reject({ userCancelled: true, message: 'cancelled' }); } if (window.__CAP.next === 'fail') { window.__CAP.next = ''; return Promise.reject({ message: 'Kart reddedildi' }); } return window.__rcAdd(window.__CAP.user, id).then(() => ({})); },
       restorePurchases: () => { window.__CAP.calls.push(['restore']); return Promise.resolve({}); } },
-    StatusBar: { hide: () => Promise.resolve() }, App: { addListener: () => {}, minimizeApp: () => {} } } };
+    AdMob: { // sahte reklam eklentisi (@capacitor-community/admob ile aynı adlar). adNext: '' (sonuna kadar izlendi) | skip (yarıda kapatıldı; söz sonuçlanmaz) | nofill | eventonly (ödül yalnız olayla) | nodismiss (kapanış olayı gelmez) | silent (hiçbir olay gelmez, söz sonuçlanmaz)
+      initialize: (o) => { window.__CAP.calls.push(['adinit', o]); return Promise.resolve(); },
+      requestConsentInfo: () => { window.__CAP.calls.push(['consentinfo']); return Promise.resolve(window.__CAP.consent ? { status: 'REQUIRED', isConsentFormAvailable: true } : { status: 'NOT_REQUIRED', isConsentFormAvailable: false }); },
+      showConsentForm: () => { window.__CAP.calls.push(['consentform']); return Promise.resolve({ status: 'OBTAINED' }); },
+      addListener: (ev, cb) => { (window.__CAP.adL[ev] = window.__CAP.adL[ev] || []).push(cb); return { remove: () => {} }; },
+      prepareRewardVideoAd: (o) => { window.__CAP.calls.push(['adprep', o]); if (window.__CAP.adNext === 'nofill') { window.__CAP.adNext = ''; fire('onRewardedVideoAdFailedToLoad', { code: 3, message: 'No fill' }); return Promise.reject({ message: 'No fill' }); } return Promise.resolve({ adUnitId: o.adId }); },
+      showRewardVideoAd: () => { window.__CAP.calls.push(['adshow']); const mode = window.__CAP.adNext; window.__CAP.adNext = '';
+        return new Promise((res) => { if (mode === 'silent') return; setTimeout(() => { fire('onRewardedVideoAdShowed'); }, 30); setTimeout(() => {
+          if (mode === 'skip') { fire('onRewardedVideoAdDismissed'); return; }
+          if (mode === 'eventonly') { fire('onRewardedVideoAdReward', RW); fire('onRewardedVideoAdDismissed'); return; }
+          if (mode === 'nodismiss') { fire('onRewardedVideoAdReward', RW); res(RW); return; }
+          fire('onRewardedVideoAdReward', RW); res(RW); fire('onRewardedVideoAdDismissed'); }, window.__CAP.adMs); }); } },
+    StatusBar: { hide: () => Promise.resolve() }, App: { addListener: (ev, cb) => { (window.__CAP.appL[ev] = window.__CAP.appL[ev] || []).push(cb); return { remove: () => {} }; }, minimizeApp: () => {} } } };
 }
 (async () => {
   let pass = 0, fail = 0; const ok = (c, n, x) => { c ? pass++ : fail++; console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? ' :: ' + String(x).slice(0, 320) : '')); };
@@ -23,16 +37,18 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   const SUBS = {}; let seq = 0, clock = Date.now() - 3600000;
   const rc = http.createServer((q, r) => { const id = decodeURIComponent(q.url.split('/').pop()); r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ subscriber: { non_subscriptions: SUBS[id] || {} } })); }); await new Promise((r) => rc.listen(RC, '127.0.0.1', r));
   const rcAdd = (player, product) => { seq++; clock += 60000; SUBS[player] = SUBS[player] || {}; (SUBS[player][product] = SUBS[player][product] || []).push({ id: 'rc_' + seq, store_transaction_id: 'GPA.' + seq, purchase_date: new Date(clock).toISOString(), store: 'play_store', is_sandbox: false }); return true; };
-  const srv = S.start(PORT, { ADMIN_KEY: KEY, RC_WEBHOOK_SECRET: 'wh-75', RC_SECRET_KEY: 'sk-75', RC_API_BASE: 'http://127.0.0.1:' + RC }, LOG); await S.up(PORT, LOG, true);
+  const srv = S.start(PORT, { ADMIN_KEY: KEY, RC_WEBHOOK_SECRET: 'wh-75', RC_SECRET_KEY: 'sk-75', RC_API_BASE: 'http://127.0.0.1:' + RC, ADS_MIN_MS: '900', ADS_COOLDOWN_MS: '0' }, LOG); /* reklam: sahte reklam 800 ms sürer (+350 ms kapanış payı) → 900 ms eşiğini geçer; adMs=1 ile "reklam bitmeden" yolu denenir */ await S.up(PORT, LOG, true);
   const SET = { tutorialDone: true, welcomed: true, meldHinted: true, tipSkin: true, tipStore: true, sound: false, speed: 'fast', hints: false };
   const open = async (o) => { // o: { native, platform, lang, w, h, mobile }
     const b = await L.launch({ w: o.w || 1366, h: o.h || 768, mobile: o.mobile, lang: o.lang });
     await b.ctx.addInitScript((s) => { try { if (!localStorage.getItem('ao.settings')) localStorage.setItem('ao.settings', JSON.stringify(s)); if (!localStorage.getItem('ao.consent')) localStorage.setItem('ao.consent', JSON.stringify({ v: '1.1', at: Date.now(), adult: true })); } catch (e) {} }, SET);
-    if (o.native) { await b.ctx.exposeFunction('__rcAdd', rcAdd); await b.ctx.addInitScript(capInit, { config: { server: BASE, rcAndroid: 'goog_test', rcIos: 'appl_test' }, prices: PRICES, platform: o.platform || 'android' }); }
+    if (o.native) { await b.ctx.exposeFunction('__rcAdd', rcAdd); await b.ctx.addInitScript(capInit, { config: Object.assign({ server: BASE, rcAndroid: 'goog_test', rcIos: 'appl_test' }, o.ads === false ? {} : { admob: { test: true, rewardedAndroid: 'ca-app-pub-0000/android-odul', rewardedIos: 'ca-app-pub-0000/ios-odul' } }), prices: PRICES, platform: o.platform || 'android' }); }
     await b.page.goto(BASE + '/'); return b; };
   const login = async (page) => { await page.waitForSelector('#gGuest', { timeout: 20000 }); await page.click('#gGuest'); await page.waitForSelector('#lbPlay', { timeout: 20000 }); await page.waitForTimeout(900); };
   const coins = (page) => page.evaluate(() => AO.wardrobe().coins); const toasts = async (page) => (await L.ui(page)).toasts.join(' | ');
   const ovText = (page) => page.evaluate(() => { const o = document.querySelector('#overlay .card'); return o ? o.textContent.replace(/\s+/g, ' ').trim() : ''; });
+  const adReady = (page) => page.waitForFunction(() => { const g = document.querySelector('#adGo'); return g && !g.disabled && /Reklamı izle|Watch the ad/.test(g.textContent); }, null, { timeout: 8000 }).then(() => true, () => false); // pencere açılınca hak sunucudan tazelenir; düğme ondan sonra açılır
+  const adN = (page, k) => page.evaluate((k) => window.__CAP.calls.filter((x) => x[0] === k).length, k);
 
   // ================= UYGULAMA (Android benzetimi) =================
   let b = await open({ native: true, platform: 'android', w: 844, h: 390, mobile: true }); let page = b.page; await login(page);
@@ -44,7 +60,7 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   ok(st.ready && st.n === 5 && st.prices.baslangic === '₺29,99', 'mağaza fiyatları okundu, ürün listesi hazır', JSON.stringify(st.prices));
   await page.waitForTimeout(600);
   let lob = await page.evaluate(() => ({ nav: Array.from(document.querySelectorAll('.lnav .nav')).map((x) => x.id), reklam: !!document.querySelector('#nav-reklam'), soon: document.querySelectorAll('.lnav .soon').length, gift: !!document.querySelector('#nav-magaza .gift'), dotIn: !!document.querySelector('#nav-bonus .dot'), dotLoose: document.querySelectorAll('.lobby > .dot, #screen > .dot').length, over: document.documentElement.scrollWidth > window.innerWidth + 1, ov: !!document.querySelector('#overlay .card') }));
-  ok(!lob.reklam && lob.soon === 0 && lob.nav.length === 8, 'lobide çalışmayan "Altın Kazan — Yakında" düğmesi yok (8 düğme)', lob.nav.join(','));
+  ok(lob.reklam && lob.soon === 0 && lob.nav.length === 9, 'uygulamada reklam ayarı varken "Altın Kazan" düğmesi var ve "Yakında" yazmıyor (9 düğme)', lob.nav.join(','));
   ok(lob.gift, 'Mağaza düğmesinde hediye işareti (Başlangıç Paketi alınabilir)');
   ok(lob.dotIn && lob.dotLoose === 0, 'Görevler noktası düğmenin üstünde (düğme sayısı değişince kaymaz)');
   const geo = await page.evaluate(() => { const r = (s) => { const e = document.querySelector(s); if (!e) return null; const q = e.getBoundingClientRect(); return [Math.round(q.left), Math.round(q.right), Math.round(q.top), Math.round(q.bottom)]; }; const navs = Array.from(document.querySelectorAll('.lnav .nav')).map((e) => e.getBoundingClientRect()); const mid = (navs[0].left + navs[navs.length - 1].right) / 2, stage = document.querySelector('.lnav').getBoundingClientRect(); return { off: Math.round(mid - (stage.left + stage.right) / 2), dot: r('#nav-bonus .dot'), bonus: r('#nav-bonus'), inside: navs.every((n) => n.left >= -1 && n.right <= window.innerWidth + 1) }; });
@@ -102,7 +118,52 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   ok(!st.ov && st.lobby && !st.gift && !st.avail && st.o.n >= 3, 'satın alınca pencere kapanır, hediye işareti kalkar, teklif bir daha çıkmaz');
   await page.click('#nav-magaza'); await page.waitForSelector('#sTabs', { timeout: 6000 }); await page.evaluate(() => { const t = Array.from(document.querySelectorAll('#sTabs button')).find((x) => /Altın Al/.test(x.textContent)); t && t.click(); }); await page.waitForSelector('#sGrid .item.gold', { timeout: 6000 });
   ok(await page.evaluate(() => { const d = document.querySelector('#sGrid .item.gold'); return !!d.querySelector('.have') && !d.querySelector('button.buy'); }), 'Altın Al sekmesinde paket "Sende" (yeniden alınamaz)');
+  // ================= ödüllü reklam (v10.19) =================
+  await page.evaluate(() => { const c = document.querySelector('#sClose'); c && c.click(); }); await page.waitForTimeout(300); await page.evaluate(() => { DonguApp.setState('LOBBY'); AO.lobby(); }); await page.waitForSelector('#nav-reklam', { timeout: 6000 });
+  const a0 = await coins(page); await page.click('#nav-reklam'); await page.waitForSelector('#adGo', { timeout: 6000 }); let rdy = await adReady(page); let ad = await ovText(page);
+  ok(rdy && /Altın Kazan/.test(ad) && /40 altın/.test(ad) && /Bugün kalan hak: 5 \/ 5/.test(ad), 'Altın Kazan penceresi: 40 altın, bugün 5/5, "Reklamı izle" açık', ad.slice(0, 140));
+  ok(await page.evaluate(() => { const c = document.querySelector('#overlay .card').getBoundingClientRect(), b1 = document.querySelector('#adGo').getBoundingClientRect(), b2 = document.querySelector('#adNo').getBoundingClientRect(); return c.left >= 0 && c.right <= innerWidth && c.top >= 0 && b1.bottom <= innerHeight + 1 && b2.bottom <= innerHeight + 1 && b1.width > 60 && b2.width > 40; }), 'reklam penceresi telefon ekranına sığıyor, iki düğme de görünür');
+  await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove())); await page.waitForTimeout(700); await page.screenshot({ path: path.join(OUT, 'native_reklam.png') });
+  await page.click('#adGo'); await page.waitForFunction((c) => AO.wardrobe().coins === c + 40, a0, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(300);
+  ok(await coins(page) === a0 + 40 && /\+40 altın/.test(await toasts(page)), 'reklam sonuna kadar izlendi: +40 altın', 'altın ' + (await coins(page)) + ' · ' + await toasts(page));
+  st = await page.evaluate(() => { const c = window.__CAP.calls; const i = c.find((x) => x[0] === 'adinit'), p = c.find((x) => x[0] === 'adprep'); return { init: i && i[1], prep: p && p[1], me: AO.acc.auth.id }; });
+  ok(st.init && st.init.initializeForTesting === true && st.init.tagForChildDirectedTreatment === false && (await adN(page, 'consentinfo')) === 1 && (await adN(page, 'consentform')) === 0, 'reklam eklentisi deneme kipinde kuruldu; izin gerekmeyen bölgede izin formu açılmadı', JSON.stringify(st.init));
+  ok(st.prep && st.prep.adId === 'ca-app-pub-0000/android-odul' && st.prep.isTesting === true && st.prep.npa === true && st.prep.ssv && st.prep.ssv.userId === st.me && /^[0-9a-f]{24}$/.test(st.prep.ssv.customData), 'reklam isteği: Android birimi, kişiselleştirilmemiş, sunucu doğrulaması için oyuncu kimliği + tek kullanımlık kod', JSON.stringify(st.prep));
+  rdy = await adReady(page); ad = await ovText(page); ok(rdy && /Bugün kalan hak: 4 \/ 5/.test(ad), 'pencere açık kaldı ve güncellendi: 4/5', ad.slice(0, 120));
+  ok(((await S.post(PORT, '/api/me', await page.evaluate(() => AO.acc.auth))).json.coins) === a0 + 40, 'sunucudaki bakiye aynı');
+  await page.evaluate(() => { window.__CAP.adNext = 'skip'; }); await page.click('#adGo'); await page.waitForTimeout(1900);
+  ok(await coins(page) === a0 + 40 && /sonuna kadar izlenmedi/.test(await toasts(page)) && /4 \/ 5/.test(await ovText(page)), 'reklam yarıda kapatılırsa altın verilmez, hak düşmez', await toasts(page));
+  await adReady(page); await page.evaluate(() => { window.__CAP.adNext = 'nofill'; }); await page.click('#adGo'); await page.waitForTimeout(900);
+  ok(await coins(page) === a0 + 40 && /gösterilecek reklam yok/.test(await toasts(page)) && (await adReady(page)), 'reklam bulunamazsa açık bildirim; yeniden denenebilir', await toasts(page));
+  await page.route('**/api/ads/start', (rt) => rt.abort()); await page.click('#adGo'); await page.waitForTimeout(900); const tOff = await toasts(page); await page.unroute('**/api/ads/start');
+  ok(/Sunucuya ulaşılamadı/.test(tOff) && !/Failed to fetch|Load failed/i.test(tOff) && (await adReady(page)) && await coins(page) === a0 + 40, 'bağlantı yokken "Reklamı izle": anlaşılır uyarı (tarayıcının teknik iletisi değil), düğme yeniden açılır', tOff);
+  const shS = await adN(page, 'adshow'); await page.evaluate(() => { window.__CAP.adNext = 'silent'; }); await page.click('#adGo'); await page.waitForFunction((n) => window.__CAP.calls.filter((x) => x[0] === 'adshow').length === n + 1 && AO.ads.cur && AO.ads.cur.showAt > 0, shS, { timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(600); const stillBusy = await page.evaluate(() => AO.ads.busy === true); await page.evaluate(() => { (window.__CAP.appL.resume || []).forEach((f) => f()); }); await page.waitForTimeout(2200);
+  ok(stillBusy && await coins(page) === a0 + 40 && /sonuna kadar izlenmedi/.test(await toasts(page)) && (await adReady(page)) && (await page.evaluate(() => AO.ads.busy === false)), 'Android: reklamdan hiçbir olay gelmese de oyun öne gelince (resume) reklam bitmiş sayılır; düğme kilitli kalmaz', await toasts(page));
+  const sh0 = await adN(page, 'adshow'); await page.evaluate(() => { document.querySelector('#adGo').click(); document.querySelector('#adNo').click(); }); await page.waitForTimeout(1300);
+  ok(await coins(page) === a0 + 40 && (await adN(page, 'adshow')) === sh0 && !(await page.$('#adGo')) && !!(await page.$('#lbPlay')) && (await page.evaluate(() => AO.ads.busy === false)), 'reklam yüklenirken pencere kapatılırsa reklam açılmaz, altın verilmez');
+  await page.click('#nav-reklam'); await page.waitForSelector('#adGo', { timeout: 6000 }); await adReady(page);
+  await page.evaluate(() => { const g = document.querySelector('#adGo'); g.click(); g.click(); }); await page.waitForFunction((c) => AO.wardrobe().coins >= c + 80, a0, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(700);
+  ok(await coins(page) === a0 + 80 && (await adN(page, 'adshow')) === sh0 + 1, 'çift dokunma: tek reklam, tek ödül');
+  await adReady(page); await page.evaluate(() => { window.__CAP.adNext = 'eventonly'; }); await page.click('#adGo'); await page.waitForFunction((c) => AO.wardrobe().coins === c + 120, a0, { timeout: 8000 }).catch(() => {});
+  ok(await coins(page) === a0 + 120, 'ödül yalnız olayla bildirilse de (söz sonuçlanmasa da) işlenir');
+  await adReady(page); await page.evaluate(() => { AO.ads.wd = 500; window.__CAP.adNext = 'nodismiss'; }); await page.click('#adGo'); await page.waitForFunction((c) => AO.wardrobe().coins === c + 160, a0, { timeout: 8000 }).catch(() => {});
+  ok(await coins(page) === a0 + 160 && (await page.evaluate(() => AO.ads.busy === false)), 'kapanış olayı hiç gelmese de ödül işlenir, düğme kilitli kalmaz (bekçi süre)');
+  await adReady(page); await page.click('#adGo'); await page.waitForFunction((c) => AO.wardrobe().coins === c + 200, a0, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  ad = await ovText(page); st = await page.evaluate(() => ({ dis: document.querySelector('#adGo').disabled }));
+  ok(await coins(page) === a0 + 200 && /hakkın bitti/.test(ad) && st.dis && (await adN(page, 'adinit')) === 1 && (await adN(page, 'consentinfo')) === 1, 'günün 5 reklamı: +200 altın; "bugünkü hakkın bitti", düğme kapalı; eklenti bir kez kuruldu', ad.slice(0, 120));
+  await page.click('#adNo'); await page.waitForTimeout(400);
+  ok(!(await page.$('#adGo')) && !!(await page.$('#lbPlay')) && (await page.evaluate(() => (document.querySelector('.coinbox span') || {}).textContent || '')).replace(/\D/g, '') === String(a0 + 200), '"Kapat" lobiye döner; lobideki altın güncel', await page.evaluate(() => (document.querySelector('.coinbox span') || {}).textContent || ''));
+  await page.evaluate(() => { AO.acc.player.ads = { gold: 40, max: 5, left: 3, waitMs: 2500 }; AO.ads.at = Date.now(); }); await page.click('#nav-reklam'); await page.waitForSelector('#adGo', { timeout: 5000 });
+  st = await page.evaluate(() => ({ dis: document.querySelector('#adGo').disabled, t: document.querySelector('#adGo').textContent })); ok(st.dis && /Sonraki reklam: \d+ sn/.test(st.t), 'iki reklam arası bekleme: geri sayım, düğme kapalı', st.t);
+  ok(await adReady(page), 'süre dolunca düğme açılır');
+  await page.evaluate(() => { AO.acc.player.ads = null; AO.showAdOffer(); }); await page.waitForTimeout(400);
+  ok(!(await page.$('#adGo')) && /Reklam ödülü şu an kapalı/.test(await toasts(page)) && !(await page.$('#nav-reklam')) && !!(await page.$('#lbPlay')), 'sunucu reklam ödülünü kapatmışsa pencere kapanır, lobide düğme kalmaz', await toasts(page));
   ok(b.errors.length === 0, 'uygulama oturumunda sayfa hatası yok', b.errors.join(' | '));
+  await b.browser.close();
+  // ---- reklam ayarı olmayan uygulama paketi: düğme yok
+  b = await open({ native: true, platform: 'android', ads: false }); page = b.page; await login(page); await page.waitForTimeout(500);
+  ok(!(await page.$('#nav-reklam')) && (await page.$$('.lnav .nav')).length === 8 && !(await page.evaluate(() => AO.adsAvailable())), 'reklam ayarı olmayan pakette "Altın Kazan" düğmesi yok (8 düğme)');
   await b.browser.close();
   // ---- üç kez "Şimdi değil" → bir daha çıkmaz
   b = await open({ native: true, platform: 'android' }); page = b.page; await login(page); await page.waitForFunction(() => AO.iap.ready && AO.iap.products.length === 5, null, { timeout: 8000 }).catch(() => {});
@@ -121,12 +182,23 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   await page.click('#lbPlus'); await page.waitForSelector('#sGrid .item.gold', { timeout: 6000 }); const foot = await page.evaluate(() => document.querySelector('#sGrid .gnote').textContent);
   ok(/App Store/.test(foot) && !/Google Play/.test(foot), 'iPhone Altın Al dipnotu yalnız App Store der', foot.slice(0, 100));
   await page.evaluate(() => { document.querySelector('#sClose') && document.querySelector('#sClose').click(); }); await page.waitForTimeout(300);
+  await page.evaluate(() => { window.__CAP.consent = true; DonguApp.setState('LOBBY'); AO.lobby(); }); await page.waitForSelector('#nav-reklam', { timeout: 6000 }); await page.click('#nav-reklam'); await page.waitForSelector('#adGo', { timeout: 6000 }); await adReady(page); en = await ovText(page);
+  ok(/Earn Gold/.test(en) && /40 gold/.test(en) && /Left today: 5 \/ 5/.test(en) && /Watch the ad/.test(en) && /Close/.test(en) && !/(Reklam|Bugün|altın|Kapat)/.test(en), 'İngilizce Altın Kazan penceresi', en.slice(0, 140));
+  await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove())); await page.waitForTimeout(700); await page.screenshot({ path: path.join(OUT, 'native_reklam_en_ios.png') });
+  const i0 = await coins(page); await page.evaluate(() => { window.__CAP.adMs = 2500; }); await page.click('#adGo'); await page.waitForFunction(() => window.__CAP.calls.some((x) => x[0] === 'adshow'), null, { timeout: 6000 }).catch(() => {}); await page.evaluate(() => { (window.__CAP.appL.resume || []).forEach((f) => f()); window.__CAP.adMs = 800; }); /* iPhone'da uygulamadan çıkıp dönmek (resume) reklamı bitirmiş saymaz: reklam 2,5 sn daha sürüyor */
+  await page.waitForFunction((c) => AO.wardrobe().coins === c + 40, i0, { timeout: 9000 }).catch(() => {}); await page.waitForTimeout(300);
+  st = await page.evaluate(() => (window.__CAP.calls.find((x) => x[0] === 'adprep') || [])[1]); let tEn = await toasts(page);
+  ok(await coins(page) === i0 + 40 && st && st.adId === 'ca-app-pub-0000/ios-odul' && /\+40 gold! Ads left today: 4/.test(tEn), 'iPhone: iOS reklam birimi kullanıldı; reklam sürerken gelen "öne geldi" bildirimi reklamı kesmedi; ödül verildi, bildirim İngilizce', tEn);
+  ok((await adN(page, 'consentform')) === 1 && (await adN(page, 'adinit')) === 1, 'izin gereken bölgede ilk reklamdan önce Google izin formu bir kez gösterildi');
+  await adReady(page); await page.evaluate(() => { window.__CAP.adMs = 1; }); await page.click('#adGo'); await page.waitForTimeout(1500); tEn = await toasts(page);
+  ok(await coins(page) === i0 + 40 && /can't be claimed before the ad ends/.test(tEn) && (await adN(page, 'consentform')) === 1, 'sunucu "reklam bitmeden ödül alınamaz" derse altın verilmez; ileti İngilizce', tEn);
+  await page.evaluate(() => { const c = document.querySelector('#adNo'); c && c.click(); }); await page.waitForTimeout(300);
   ok(b.errors.length === 0, 'iPhone oturumunda sayfa hatası yok', b.errors.join(' | '));
   await b.browser.close();
   // ================= WEB (dongu.app gibi): teklif yok; kurtarma kodu =================
   b = await open({ native: false }); page = b.page; await login(page);
   st = await page.evaluate(() => ({ reklam: !!document.querySelector('#nav-reklam'), gift: !!document.querySelector('.gift'), avail: AO.offer.available(), nav: document.querySelectorAll('.lnav .nav').length }));
-  ok(!st.reklam && !st.gift && !st.avail && st.nav === 8, 'web: reklam düğmesi, hediye işareti ve teklif yok');
+  ok(!st.reklam && !st.gift && !st.avail && st.nav === 8 && (await page.evaluate(() => !AO.adsAvailable() && !!AO.acc.player.ads)), 'web: reklam düğmesi, hediye işareti ve teklif yok (sunucu reklam özetini gönderse de)');
   await page.evaluate(() => { AO.acc.player.stats.matches = 3; AO.lobby(); }); await page.waitForTimeout(1500); ok(!(await page.$('#ofBuy')), 'web: maçtan sonra teklif penceresi çıkmaz (web\'de satın alma yok)');
   await page.click('#lbPlus'); await page.waitForSelector('#sGrid .item.gold', { timeout: 6000 }); ok(await page.evaluate(() => Array.from(document.querySelectorAll('#sGrid .item.gold button.buy')).every((x) => /uygulamada/.test(x.textContent))), 'web: Altın Al düğmelerinde "· uygulamada" yazıyor');
   await page.evaluate(() => { document.querySelector('#sClose') && document.querySelector('#sClose').click(); }); await page.waitForTimeout(300);
