@@ -25,7 +25,11 @@ repositories {
     mavenCentral()
 }
 
+// Capacitor'ın getActivity() yöntemi AppCompatActivity döndürür; derleyici bu sınıfı görmeli (capacitor-android onu dışarı açmaz).
+def appCompatVersion = rootProject.ext.has('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.1'
+
 dependencies {
     implementation project(':capacitor-android')
+    implementation "androidx.appcompat:appcompat:${appCompatVersion}"
     implementation 'com.android.billingclient:billing:8.0.0'
 }
