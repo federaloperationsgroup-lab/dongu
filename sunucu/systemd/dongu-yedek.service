@@ -1,0 +1,6 @@
+[Unit]
+Description=Döngü: veritabanı yedeği
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dongu-yedek

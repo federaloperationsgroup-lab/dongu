@@ -1,0 +1,9 @@
+[Unit]
+Description=Döngü: gecelik veritabanı yedeği (04.30 Türkiye saati)
+
+[Timer]
+OnCalendar=*-*-* 01:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

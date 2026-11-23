@@ -8,9 +8,11 @@ sunucu olarak `https://dongu.app` kullanılır (app.js `NATIVE` dalı: `SERVER_O
 - Yerel projeler (android/, ios/) depoda **tutulmaz**; GitHub Actions her derlemede `npx cap add` ile üretip `patch-native.sh` ile ayarlar.
 - Simgeler/açılış: `assets/icon.png` (v10.19: alfasız RGB — App Store alfa kanallı simgeyi kabul etmez), `icon-foreground.png`, `icon-background.png`, `splash.png` → `@capacitor/assets`.
 - **v10.19: Capacitor 8** (Node 22, Android derleme/hedef API 36 — Google Play 31 Ağustos 2026'dan beri yeni uygulamada bunu ister —, en düşük Android 7 / API 24, iOS 15+). iOS projesi CocoaPods ile üretilir (`npx cap add ios --packagemanager CocoaPods`).
-- **Eklentiler:** `@revenuecat/purchases-capacitor` (satın alma), `@capacitor-community/admob` (ödüllü reklam), `@capacitor/app`, `status-bar`, `splash-screen`.
+- **Eklentiler (v10.20):** `dongu-store` (satın alma; kendi yerel eklentimiz, `plugins/dongu-store`, Google Play Faturalandırma Kitaplığı 8; RevenueCat yok), `@capacitor/app`, `status-bar`, `splash-screen`. `@capacitor-community/admob` (ödüllü reklam) yalnız `app-config.json` → `"ads": true` iken `optional-plugins.sh` ile kurulur; ilk sürümde `ads: false` (pakette reklam yazılımı yok).
+- **Ayar özeti:** `app-config.json` → `store` (satın alma açık/kapalı), `ads` (reklam açık/kapalı), `admob` (reklam kimlikleri; yalnız `ads: true` iken kullanılır). `prepare-www.sh` hangi hizmetin açık olduğunu kimlik değeri göstermeden ekrana yazar.
+- **Yedekleme:** `patch-native.sh` Android bulut yedeklemesini kapatır (`allowBackup="false"`).
 
-## Reklam (AdMob) ayarı — `app-config.json` → `admob`
+## Reklam (AdMob) ayarı — `app-config.json` → `admob` (yalnız `"ads": true` iken geçerli)
 | Alan | Ne | Nereden |
 |---|---|---|
 | `appIdAndroid`, `appIdIos` | AdMob **uygulama** kimliği (`ca-app-pub-…~…`) | AdMob → Uygulamalar → uygulama → Uygulama ayarları |

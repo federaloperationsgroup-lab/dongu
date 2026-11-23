@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Google Play satın alma doğrulaması için Google hizmet hesabı anahtarını (JSON dosyası) sunucuya yerleştirir ve dener.
+#   dongu-google          → anahtarı yapıştır, yerleştir ve dene
+#   dongu-google --dene   → yerleştirilmiş anahtarı yeniden dene (ör. Play Console izni etkinleşince)
+# Anahtar yalnız bu sunucuda durur; depoya, sohbete ya da ekran görüntüsüne konmaz. Yapıştırılan metin ekranda görünmez.
+set -euo pipefail
+ENVF=${DONGU_ENV:-/etc/dongu/dongu.env}; GRP=${DONGU_GRP:-dongu}
+F=$(grep -E '^GP_SERVICE_ACCOUNT_FILE=' "$ENVF" | cut -d= -f2- || true); F=${F:-/etc/dongu/google-hizmet-hesabi.json}
+PORT=$(grep -E '^PORT=' "$ENVF" | cut -d= -f2); PORT=${PORT:-8080}
+if [ "${1:-}" != "--dene" ]; then
+  echo "1) Google'dan indirdiğiniz anahtar dosyasını (….json) Not Defteri ile açın; tamamını seçip kopyalayın (Ctrl+A, sonra Ctrl+C)."
+  echo "2) Bu pencereye yapıştırın (farenin sağ tuşu). \"Birden çok satır\" uyarısı çıkarsa \"Yine de yapıştır\" deyin."
+  echo "3) Enter'a, ardından Ctrl+D'ye basın."
+  echo "Yapıştırdığınız metin ekranda GÖRÜNMEZ; bu doğrudur."
+  umask 077; TMP=$(mktemp); trap 'stty echo 2>/dev/null || true; rm -f "$TMP"' EXIT
+  stty -echo 2>/dev/null || true
+  cat > "$TMP"
+  stty echo 2>/dev/null || true; echo
+  python3 - "$TMP" <<'PY' || { echo "HATA: yapıştırılan metin geçerli bir hizmet hesabı anahtarı değil (dosyanın tamamı kopyalanmamış olabilir). Hiçbir şey değiştirilmedi."; exit 1; }
+import json, sys
+try:
+    j = json.load(open(sys.argv[1], encoding='utf-8-sig'))
+    assert j.get('type') == 'service_account' and j.get('client_email') and 'PRIVATE KEY' in j.get('private_key', '')
+except Exception:
+    sys.exit(1)
+name, _, dom = j['client_email'].partition('@')
+print('Anahtar tanındı (hizmet hesabı: ' + name[:3] + '…@' + dom + ').')
+PY
+  install -o root -g "$GRP" -m 640 "$TMP" "$F"
+  systemctl restart dongu
+fi
+for _ in $(seq 1 "${DONGU_WAIT:-40}"); do sleep 1; if curl -fsS -m 3 "http://127.0.0.1:${PORT}/durum" >/dev/null 2>&1; then break; fi; done
+curl -fsS -m 5 "http://127.0.0.1:${PORT}/durum" 2>/dev/null | grep -o 'Satın alma:[^.]*' || { echo "Oyun sunucusu yanıt vermiyor; dongu-durum ile bakın."; exit 1; }
+# Gerçek deneme: sunucu Google Play'e bağlanıp iade listesini ister (yönetim anahtarı ekrana ve komut satırına yazılmaz)
+KEY=$(grep -E '^ADMIN_KEY=' "$ENVF" | cut -d= -f2- || true)
+if [ -z "$KEY" ]; then echo "Not: yönetim anahtarı (ADMIN_KEY) boş olduğu için Google bağlantısı burada denenemedi."; exit 0; fi
+ENC=$(KEY="$KEY" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["KEY"], safe=""))')
+R=$(printf 'url = "http://127.0.0.1:%s/yonetim/iade-tara?key=%s"\n' "$PORT" "$ENC" | curl -sS -m 40 -K - 2>/dev/null || true)
+ERR=$(printf '%s' "$R" | sed -n 's/.*"error":"\([^"]*\)".*/\1/p')
+case "$R" in
+  *'"seen"'*) echo "Google bağlantısı ÇALIŞIYOR: sunucu Google Play'e bağlandı ve satın alma kayıtlarını okuyabildi.";;
+  *'"busy"'*) echo "Google bağlantısı şu an başka bir denetimle meşgul; bir dakika sonra dongu-durum ile bakın.";;
+  *'"off"'*) echo "HATA: sunucu anahtarı okuyamadı. Bu ekranın görüntüsünü Claude'a gönderin."; exit 1;;
+  *yetkilendirme*) echo "Google anahtarı KABUL ETMEDİ ($ERR). Anahtar silinmiş ya da yanlış dosya olabilir; Google'dan yeni anahtar indirip yeniden deneyin."; exit 1;;
+  *'HTTP 401'*|*'HTTP 403'*) echo "Google anahtarı tanıdı ama izin vermedi ($ERR). Play Console → Kullanıcılar ve izinler bölümünde bu hizmet hesabına izin verilmeli; yeni verilen iznin etkinleşmesi 24 saati bulabilir. Sonra yeniden denemek için: dongu-google --dene"; exit 1;;
+  *) echo "Google'a bağlanılamadı (${ERR:-yanıt yok}). Bir dakika sonra yeniden deneyin; sürerse bu ekranın görüntüsünü Claude'a gönderin."; exit 1;;
+esac

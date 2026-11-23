@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Sunucunun durum özeti. Gizli bilgi göstermez; ekran görüntüsü paylaşılabilir.
+set -uo pipefail
+ENVF=${DONGU_ENV:-/etc/dongu/dongu.env}; APP=${DONGU_APP:-/opt/dongu/app}; BK=${DONGU_BACKUPS:-/var/backups/dongu}; CF=${DONGU_CADDYFILE:-/etc/caddy/Caddyfile}; LOG=${DONGU_LOG:-/var/log/dongu-guncelle.log}
+PORT=$(grep -E '^PORT=' "$ENVF" 2>/dev/null | cut -d= -f2); PORT=${PORT:-8080}
+st() { local s; s=$(systemctl is-active "$1" 2>/dev/null); if [ "$s" = "active" ]; then echo "çalışıyor"; else echo "ÇALIŞMIYOR (${s:-bilinmiyor})"; fi; }
+echo "Oyun sunucusu      : $(st dongu)"
+PGV=$(cd / && sudo -u postgres psql -X -Atc 'show server_version' 2>/dev/null | cut -d' ' -f1)   # gerçekten yanıt veriyor mu
+if [ -n "$PGV" ]; then echo "Veritabanı         : çalışıyor · PostgreSQL $PGV"; else echo "Veritabanı         : ÇALIŞMIYOR (ayrıntı: systemctl status postgresql)"; fi
+echo "Web sunucusu       : $(st caddy)"
+echo "Kendiliğinden güncelleme: $(st dongu-guncelle.timer) · gecelik yedek: $(st dongu-yedek.timer)"
+if ufw status 2>/dev/null | head -1 | grep -qi 'active' && ! ufw status 2>/dev/null | head -1 | grep -qi 'inactive'; then echo "Güvenlik duvarı    : açık"; else echo "Güvenlik duvarı    : KAPALI"; fi
+if D=$(curl -fsS -m 5 "http://127.0.0.1:${PORT}/durum" 2>/dev/null); then echo "Oyun durumu        :"; echo "$D" | tr '\n' ' ' | cut -c1-900 | fold -s -w 110 | sed 's/^/   /'
+else echo "Oyun durumu        : sunucu yanıt vermiyor (ayrıntı: journalctl -u dongu -n 30)"; fi
+SITE=$(grep -m1 -E '^[^#[:space:]{][^{]*\{[[:space:]]*$' "$CF" 2>/dev/null | sed -E 's/[[:space:]]*\{[[:space:]]*$//')
+if [ -z "$SITE" ] || [ "$SITE" = ":80" ]; then echo "Alan adları        : yok (yalnız IP adresiyle, deneme)"
+else
+  echo "Alan adları        : $SITE"
+  FIRST=${SITE%%,*}
+  if curl -fsS -m 8 -o /dev/null "https://${FIRST}/durum" 2>/dev/null; then echo "Güvenli bağlantı   : çalışıyor (https://${FIRST})"; else echo "Güvenli bağlantı   : ÇALIŞMIYOR (https://${FIRST} açılmadı; alan adı bu sunucuya yönlenmemiş ya da sertifika henüz alınmamış olabilir)"; fi
+fi
+echo "Kurulu sürüm       : $(sudo -u dongu git -C "$APP" log -1 --format='%h · %cd · %s' --date=format:'%d.%m.%Y %H:%M' 2>/dev/null | cut -c1-110)"
+if [ -s "$LOG" ]; then echo "Son güncelleme kayıtları:"; grep -v '^$' "$LOG" | tail -n 3 | cut -c1-160 | sed 's/^/   /'; fi
+LAST=$(find "$BK" -maxdepth 1 -name 'dongu-*.dump' -printf '%T@ %f\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2)
+echo "Son yedek          : ${LAST:-yok} (toplam $(find "$BK" -maxdepth 1 -name 'dongu-*.dump' 2>/dev/null | wc -l))"
+echo "Disk               : $(df -h / | awk 'NR==2 {print $3 " dolu / " $2 " (" $5 ")"}') · Bellek: $(free -m | awk 'NR==2 {print $3 " MB dolu / " $2 " MB"}')"
+GF=$(grep -E '^GP_SERVICE_ACCOUNT_FILE=' "$ENVF" 2>/dev/null | cut -d= -f2-)
+if [ -n "$GF" ] && [ -s "$GF" ]; then echo "Google Play anahtarı: yerleştirilmiş"; else echo "Google Play anahtarı: yok (yerleştirmek için: dongu-google)"; fi
+if [ -f /var/run/reboot-required ]; then echo "Not                : işletim sistemi güncellemesi için sunucunun yeniden başlatılması bekleniyor"; fi
+echo "Sunucu saati       : $(date '+%d.%m.%Y %H:%M %Z')"

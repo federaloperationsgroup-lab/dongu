@@ -1,0 +1,37 @@
+[Unit]
+Description=Döngü oyun sunucusu
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=dongu
+Group=dongu
+WorkingDirectory=/opt/dongu/app
+Environment=TZ=UTC
+EnvironmentFile=/etc/dongu/dongu.env
+# Veritabanı hazır olana kadar en çok 30 saniye beklenir (makine açılışında). Hazır olmasa da sunucu denenir: DB_REQUIRED=1 olduğu için
+# veritabanına ulaşamazsa dosya deposuna geçmeden kapanır ve birkaç saniye sonra yeniden başlatılır.
+ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'until pg_isready -q -h 127.0.0.1; do sleep 1; done'
+# Oyun paketi her açılışta zip dosyalarından yeniden çıkarılır (yarım kalmış ya da eski dosya kalmaz)
+ExecStartPre=/usr/bin/rm -rf /opt/dongu/app/public
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGTERM
+SyslogIdentifier=dongu
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/dongu/app
+
+[Install]
+WantedBy=multi-user.target

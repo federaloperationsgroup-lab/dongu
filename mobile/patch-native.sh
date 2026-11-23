@@ -1,6 +1,7 @@
 #!/bin/sh
 # `npx cap add android|ios` ile üretilen yerel projeyi oyuna göre ayarlar: yalnız yatay, tam ekran, sürüm numarası, uygulama adı,
 # v10.19: reklam (AdMob) uygulama kimliği, oyun kategorisi, büyük ekranda yatay kilidi.
+# v10.20: reklam ayarları yalnız app-config.json "ads": true iken yazılır (kapalıyken pakette reklam yazılımı yok); Android bulut yedeklemesi kapatılır.
 # CI her derlemede projeyi sıfırdan üretir; bu yüzden ayarlar burada, elle düzenlenen dosya yok.
 set -e
 cd "$(dirname "$0")"
@@ -11,6 +12,9 @@ cfg() { python3 -c "import json,sys
 try: c=json.load(open('app-config.json'))
 except Exception: c={}
 print((c.get('admob') or {}).get(sys.argv[1]) or sys.argv[2])" "$1" "$2"; }
+ADS=$(python3 -c "import json
+try: print('1' if json.load(open('app-config.json')).get('ads') is True else '0')
+except Exception: print('0')")
 case "$1" in
 android)
   M=android/app/src/main/AndroidManifest.xml
@@ -22,9 +26,16 @@ android)
   # Ek güvence: PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY (API 36 hedefinde geçerli).
   grep -q 'android:appCategory' "$M" || sed -i '0,/<application/s/<application/<application android:appCategory="game"/' "$M"
   grep -q 'PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY' "$M" || sed -i 's#</application>#    <property android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY" android:value="true" />\n    </application>#' "$M"
-  # v10.19: AdMob uygulama kimliği
-  ADID=$(cfg appIdAndroid 'ca-app-pub-3940256099942544~3347511713')
-  grep -q 'com.google.android.gms.ads.APPLICATION_ID' "$M" || sed -i "s#</application>#    <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ADID\" />\n    </application>#" "$M"
+  # v10.19: AdMob uygulama kimliği. v10.20: yalnız reklam açıkken (ads: true); kapalıyken reklam eklentisi de kurulmaz (optional-plugins.sh)
+  if [ "$ADS" = "1" ]; then
+    ADID=$(cfg appIdAndroid 'ca-app-pub-3940256099942544~3347511713')
+    grep -q 'com.google.android.gms.ads.APPLICATION_ID' "$M" || sed -i "s#</application>#    <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ADID\" />\n    </application>#" "$M"
+  fi
+  # v10.20: Android bulut yedeklemesi kapalı. Varsayılan ayarda uygulama verisi (hesap anahtarı, onay kaydı) oyuncunun Google hesabına yedeklenir;
+  # oyun verisi yalnız cihazda ve kendi sunucumuzda dursun diye kapatılır. Telefon değişiminde hesap kurtarma koduyla taşınır (Ayarlar → Hesap).
+  if grep -q 'android:allowBackup=' "$M"; then sed -i 's/android:allowBackup="[^"]*"/android:allowBackup="false"/' "$M"; else sed -i '0,/<application/s/<application/<application android:allowBackup="false"/' "$M"; fi
+  grep -q 'android:fullBackupContent=' "$M" || sed -i '0,/<application/s/<application/<application android:fullBackupContent="false"/' "$M"
+  grep -q 'android:allowBackup="false"' "$M" || { echo "HATA: allowBackup kapatılamadı"; exit 1; }
   # sürüm
   G=android/app/build.gradle
   sed -i "s/versionCode [0-9]*/versionCode $CODE/; s/versionName \"[^\"]*\"/versionName \"$V\"/" "$G"
@@ -36,7 +47,7 @@ android)
   # tam ekran tema (durum/gezinme çubuğu gizli): styles.xml'e windowFullscreen
   S=android/app/src/main/res/values/styles.xml
   if ! grep -q windowFullscreen "$S"; then sed -i 's#<style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">#<style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">\n        <item name="android:windowFullscreen">true</item>#' "$S"; fi
-  echo "android ayarlandı: v$V ($CODE), yatay, tam ekran, oyun kategorisi, AdMob $ADID"
+  echo "android ayarlandı: v$V ($CODE), yatay, tam ekran, oyun kategorisi, bulut yedeklemesi kapalı, reklam $([ "$ADS" = "1" ] && echo AÇIK || echo 'KAPALI (reklam kimliği yazılmadı)')"
   ;;
 ios)
   P=ios/App/App/Info.plist
@@ -50,15 +61,18 @@ ios)
   plutil -replace CFBundleVersion -string "$CODE" "$P"
   plutil -replace ITSAppUsesNonExemptEncryption -bool false "$P"
   # v10.19: AdMob uygulama kimliği + reklam ağı kimlikleri (skadnetwork.txt: Google'ın yayımladığı liste). İzleme izni (ATT) istenmez; reklamlar kişiselleştirilmemiş istenir.
-  ADID=$(cfg appIdIos 'ca-app-pub-3940256099942544~1458002511')
-  plutil -replace GADApplicationIdentifier -string "$ADID" "$P"
-  if [ -f skadnetwork.txt ]; then
-    SK=$(python3 -c "import json;print(json.dumps([{'SKAdNetworkIdentifier':l.strip()} for l in open('skadnetwork.txt') if l.strip()]))")
-    plutil -replace SKAdNetworkItems -json "$SK" "$P"
+  # v10.20: yalnız reklam açıkken (ads: true)
+  if [ "$ADS" = "1" ]; then
+    ADID=$(cfg appIdIos 'ca-app-pub-3940256099942544~1458002511')
+    plutil -replace GADApplicationIdentifier -string "$ADID" "$P"
+    if [ -f skadnetwork.txt ]; then
+      SK=$(python3 -c "import json;print(json.dumps([{'SKAdNetworkIdentifier':l.strip()} for l in open('skadnetwork.txt') if l.strip()]))")
+      plutil -replace SKAdNetworkItems -json "$SK" "$P"
+    fi
   fi
   # proje ayarlarındaki MARKETING_VERSION / CURRENT_PROJECT_VERSION da plist'i ezebilir
   sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $V;/g; s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $CODE;/g" ios/App/App.xcodeproj/project.pbxproj
-  echo "ios ayarlandı: v$V ($CODE), yatay, tam ekran, AdMob $ADID"
+  echo "ios ayarlandı: v$V ($CODE), yatay, tam ekran, reklam $([ "$ADS" = "1" ] && echo AÇIK || echo KAPALI)"
   ;;
 *) echo "kullanım: patch-native.sh android|ios"; exit 1;;
 esac

@@ -1,0 +1,8 @@
+[Unit]
+Description=Döngü: GitHub'da yeni sürüm varsa indir ve yeniden başlat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dongu-guncelle

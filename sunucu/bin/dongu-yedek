@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Veritabanının yedeğini alır (/var/backups/dongu; 14 günden eski yedekler silinir). Her gece kendiliğinden çalışır; elle de çalıştırılabilir.
+# Yedekler bu sunucuda, yalnız veritabanı yöneticisinin okuyabildiği klasörde durur. Sunucunun tamamen kaybına karşı
+# sağlayıcının (Türkiye'deki) yedekleme hizmeti ayrıca açılmalıdır.
+set -euo pipefail
+D=${DONGU_BACKUPS:-/var/backups/dongu}; PGSU=${DONGU_PGSU-sudo -u postgres}; KEEP=${DONGU_KEEP_DAYS:-14}
+cd /
+install -d -m 700 "$D"; chown postgres:postgres "$D" 2>/dev/null || true
+F="$D/dongu-$(date +%F-%H%M%S).dump"
+if ! $PGSU pg_dump -Fc dongu > "$F.tmp"; then rm -f "$F.tmp"; echo "HATA: yedek alınamadı."; exit 1; fi
+[ -s "$F.tmp" ] || { rm -f "$F.tmp"; echo "HATA: yedek boş çıktı."; exit 1; }
+mv "$F.tmp" "$F"; chown postgres:postgres "$F" 2>/dev/null || true; chmod 600 "$F"
+find "$D" -maxdepth 1 \( -name 'dongu-*.dump' -o -name 'tasima-*.log' \) -mtime +"$KEEP" -delete   # taşıma kopyası ve kaydı da aynı sürede silinir
+echo "yedek alındı: $(basename "$F") ($(du -h "$F" | cut -f1)); toplam $(find "$D" -maxdepth 1 -name 'dongu-*.dump' | wc -l) yedek"

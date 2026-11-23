@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Eski veritabanındaki (Neon) bütün oyun verisini bu sunucudaki veritabanına taşır ve iki tarafı karşılaştırır.
+# ÖNCE eski sunucu (Render) durdurulmalıdır; yoksa taşıma sırasında yazılanlar eksik kalır (karşılaştırma bunu yakalar).
+# Eski veritabanına dokunulmaz (yalnız okunur). Bu sunucudaki mevcut veri önce yedeklenir, sonra silinip yerine eskisi yüklenir.
+# Karşılaştırma tutmazsa oyun sunucusu başlatılmaz. Taşıma bir kez yapılır; yeniden çalıştırmak için: dongu-tasi --yeniden
+set -euo pipefail
+ENVF=${DONGU_ENV:-/etc/dongu/dongu.env}; PGSU=${DONGU_PGSU-sudo -u postgres}; BK=${DONGU_BACKUPS:-/var/backups/dongu}
+STATE=${DONGU_STATE:-/var/lib/dongu-guncelle}; PGLIB=${DONGU_PGLIB:-/usr/lib/postgresql}
+cd /
+NEW=$(grep -E '^DATABASE_URL=' "$ENVF" | cut -d= -f2- || true)
+[ -n "$NEW" ] || { echo "Ayar dosyasında veritabanı adresi yok: önce kurulum (kur.sh) çalıştırılmalı."; exit 1; }
+if [ -s "$STATE/tasindi" ] && [ "${1:-}" != "--yeniden" ]; then
+  echo "Taşıma daha önce yapıldı ($(cat "$STATE/tasindi")). Yeniden çalıştırmak BU SUNUCUDAKİ GÜNCEL VERİYİ SİLER ve yerine eski veritabanını yükler."
+  echo "Gerçekten isteniyorsa: dongu-tasi --yeniden"; exit 1
+fi
+q() { psql -X -q -At -v ON_ERROR_STOP=1 -d "$1" -c "$2"; }
+echo "Eski veritabanının bağlantı adresini yapıştırın ve Enter'a basın."
+echo "(Render → dongu hizmeti → Environment → DATABASE_URL satırının değeri. Yapıştırdığınız metin ekranda GÖRÜNMEZ; bu doğrudur.)"
+read -rs -p "Eski adres: " OLD; echo
+OLD=$(printf '%s' "$OLD" | tr -d '\r\n\t ')
+case "$OLD" in postgres://*|postgresql://*) ;; *) echo "Adres postgres:// ya da postgresql:// ile başlamalı. Hiçbir şey değiştirilmedi."; exit 1;; esac
+OLD=${OLD/-pooler./.}   # Neon'un "havuzlu" adresi yedek almaya uygun değildir; aynı veritabanının doğrudan adresi kullanılır
+RV=$(q "$OLD" "show server_version_num" 2>/dev/null) || { echo "Eski veritabanına bağlanılamadı (adres eksik kopyalanmış olabilir ya da veritabanı uykudaydı; bir dakika sonra yeniden deneyin). Hiçbir şey değiştirilmedi."; exit 1; }
+RMAJ=$((RV / 10000)); LMAJ=$(ls "$PGLIB" | sort -n | tail -1); TOOLS="$PGLIB/$LMAJ/bin"
+if [ "$RMAJ" -gt "$LMAJ" ]; then
+  echo "Eski veritabanı daha yeni sürümde (PostgreSQL $RMAJ; bu sunucuda $LMAJ). Uygun yedekleme aracı kuruluyor…"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q "postgresql-client-$RMAJ" >/dev/null || { echo "HATA: araç kurulamadı. Hiçbir şey değiştirilmedi. Bu ekranın görüntüsünü Claude'a gönderin."; exit 1; }
+  TOOLS="$PGLIB/$RMAJ/bin"
+fi
+TABLES=$(q "$OLD" "select tablename from pg_tables where schemaname='public' order by 1")
+[ -n "$TABLES" ] || { echo "Eski veritabanında tablo bulunamadı. Hiçbir şey değiştirilmedi."; exit 1; }
+OLDN=$(q "$OLD" "select count(*) from players" 2>/dev/null || echo "?"); NEWN=$(q "$NEW" "select count(*) from players" 2>/dev/null || echo 0)
+echo
+echo "Eski veritabanı : PostgreSQL $RMAJ, $(echo "$TABLES" | wc -l) tablo, $OLDN oyuncu kaydı"
+echo "Bu sunucu       : PostgreSQL $LMAJ, şu an $NEWN oyuncu kaydı (deneme verisi; yedeği alınıp SİLİNECEK)"
+echo
+read -r -p "Eski sunucuyu (Render) durdurdunuz mu ve taşıma başlasın mı? (evet / hayır): " A
+[ "$A" = "evet" ] || { echo "Vazgeçildi. Hiçbir şey değiştirilmedi."; exit 0; }
+
+STAGE="oyun sunucusunun durdurulması"
+finish() { rc=$?; if [ "$rc" != 0 ]; then echo; echo "TAŞIMA TAMAMLANMADI (aşama: $STAGE). Oyun sunucusu durduruldu ve BAŞLATILMADI."; echo "Bu ekranın görüntüsünü Claude'a gönderin (ekranda gizli bilgi yoktur)."; fi; }
+trap finish EXIT
+TS=$(date +%F-%H%M%S); DUMP="$BK/dongu-eski-veritabani-$TS.dump"; LOGF="$BK/tasima-$TS.log"
+mkdir -p "$STATE"; : > "$STATE/tasima-suruyor"   # taşıma bitene kadar kendiliğinden güncelleme oyun sunucusunu başlatmaz
+systemctl stop dongu
+STAGE="bu sunucudaki verinin yedeği"
+if [ "$NEWN" != "0" ]; then dongu-yedek; fi
+STAGE="eski veritabanının kopyalanması"
+install -d -m 700 "$BK"; umask 077
+"$TOOLS/pg_dump" -Fc --no-owner --no-acl --schema=public -d "$OLD" -f "$DUMP"
+echo "eski veritabanı kopyalandı ($(du -h "$DUMP" | cut -f1))"
+STAGE="yeni veritabanının hazırlanması"
+$PGSU psql -X -q -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS dongu WITH (FORCE)" -c "CREATE DATABASE dongu OWNER dongu ENCODING 'UTF8' LOCALE 'C.UTF-8' TEMPLATE template0"
+STAGE="verilerin yüklenmesi"
+"$TOOLS/pg_restore" --no-owner --no-acl -n public -d "$NEW" "$DUMP" > "$LOGF" 2>&1 || echo "not: yükleme sırasında uyarı çıktı; aşağıdaki karşılaştırma esas alınır (ayrıntı: $LOGF)"
+STAGE="karşılaştırma"
+# Her tablo için satır sayısı ve içerik özeti (her satırın özetinden hesaplanır) iki tarafta aynı olmalı
+fp() { q "$1" "set timezone='UTC'; set datestyle='ISO'; set intervalstyle='postgres'; set extra_float_digits=1; set bytea_output='hex'; select count(*) || ' ' || coalesce(md5(string_agg(h, '' order by h)), '-') from (select md5(t::text) as h from \"$2\" t) s" 2>/dev/null | tail -n 1; }
+seqs() { q "$1" "select coalesce(string_agg(sequencename || '=' || coalesce(last_value::text, '-'), ' ' order by sequencename), '') from pg_sequences where schemaname='public'" 2>/dev/null | tail -n 1; }
+echo; echo "Karşılaştırma (eski → yeni):"; BAD=0
+for t in $TABLES; do
+  o=$(fp "$OLD" "$t" || true); n=$(fp "$NEW" "$t" || true); o=${o:-okunamadı}; n=${n:-YOK}
+  if [ "$o" = "$n" ] && [ "$o" != "okunamadı" ]; then r="aynı"; else r="FARKLI"; BAD=1; fi
+  printf '  %-16s %9s satır → %9s satır   %s\n' "$t" "${o%% *}" "${n%% *}" "$r"
+done
+so=$(seqs "$OLD" || true); sn=$(seqs "$NEW" || true)
+if [ "$so" = "$sn" ]; then echo "  sayaçlar: aynı"; else echo "  sayaçlar: FARKLI"; BAD=1; fi
+if [ $BAD = 1 ]; then
+  echo; echo "Bazı tablolar aynı değil. Olası neden: eski sunucu (Render) hâlâ çalışıyor ve yazmaya devam ediyor."
+  echo "(Ayrıntı dosyası: $LOGF)"; exit 1
+fi
+STAGE="oyun sunucusunun başlatılması"
+date '+%d.%m.%Y %H:%M' > "$STATE/tasindi"; rm -f "$STATE/tasima-suruyor"
+systemctl start dongu
+PORT=$(grep -E '^PORT=' "$ENVF" | cut -d= -f2); PORT=${PORT:-8080}
+for _ in $(seq 1 "${DONGU_WAIT:-60}"); do sleep 1; if curl -fsS -m 3 "http://127.0.0.1:${PORT}/durum" >/dev/null 2>&1; then break; fi; done
+curl -fsS -m 5 "http://127.0.0.1:${PORT}/durum" >/dev/null 2>&1 || { echo "Veriler taşındı ama oyun sunucusu açılmadı (journalctl -u dongu -n 30)."; exit 1; }
+trap - EXIT
+echo; echo "TAŞIMA TAMAM: bütün tablolar aynı, oyun sunucusu yeni veriyle çalışıyor."
+echo "Eski veritabanının kopyası bu sunucuda duruyor ve 14 gün sonra kendiliğinden silinir: $(basename "$DUMP")"

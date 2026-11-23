@@ -1,8 +1,8 @@
 {
   "name": "dongu-mobile",
-  "version": "10.19.0",
+  "version": "10.20.0",
   "private": true,
-  "description": "Döngü — Android ve iOS mağaza uygulaması (Capacitor 8). Web paketi www/ içine public.zip + assets.zip'ten açılır; sunucu dongu.app.",
+  "description": "Döngü — Android ve iOS mağaza uygulaması (Capacitor 8). Web paketi www/ içine public.zip + assets.zip'ten açılır; sunucu dongu.app. v10.20: satın alma kendi eklentimizle (plugins/dongu-store, Google Play Faturalandırma); reklam eklentisi yalnız app-config.json \"ads\": true iken kurulur (optional-plugins.sh).",
   "scripts": {
     "www": "sh prepare-www.sh",
     "add:android": "npx cap add android && sh patch-native.sh android",
@@ -10,14 +10,13 @@
     "icons": "npx @capacitor/assets generate --iconBackgroundColor '#0f1430' --iconBackgroundColorDark '#0f1430' --splashBackgroundColor '#0f1430' --splashBackgroundColorDark '#0f1430'"
   },
   "dependencies": {
-    "@capacitor-community/admob": "^8.0.0",
     "@capacitor/android": "^8.0.0",
     "@capacitor/app": "^8.0.0",
     "@capacitor/core": "^8.0.0",
     "@capacitor/ios": "^8.0.0",
     "@capacitor/splash-screen": "^8.0.0",
     "@capacitor/status-bar": "^8.0.0",
-    "@revenuecat/purchases-capacitor": "^12.0.3"
+    "dongu-store": "file:./plugins/dongu-store"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",

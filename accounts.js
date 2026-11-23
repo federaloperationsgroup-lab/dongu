@@ -20,14 +20,22 @@ function init(opts, cb) {
   loadCatalog(opts.publicDir);
   if (process.env.DATABASE_URL) {
     var Pool;
-    try { Pool = require('pg').Pool; } catch (e) { return fileMode(cb, 'pg paketi yok'); }
+    try { Pool = require('pg').Pool; } catch (e) { if (DB_REQUIRED) return dbFatal('pg paketi yok'); return fileMode(cb, 'pg paketi yok'); }
     DB = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 5 });
     DB.query('CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, data JSONB NOT NULL, updated TIMESTAMPTZ DEFAULT now())')
       .then(function () { return DB.query('CREATE TABLE IF NOT EXISTS match_log (id SERIAL PRIMARY KEY, at TIMESTAMPTZ DEFAULT now(), data JSONB NOT NULL)'); }) // v9.76 ölçüm: el/maç kayıtları
       .then(function () { return DB.query("CREATE INDEX IF NOT EXISTS players_rec ON players ((data->>'rec'))").catch(function () {}); }) // v10.18: kurtarma koduyla arama
       .then(function () { mode = 'postgres'; wipeIfRequested(function () { cb(null, mode); }); })
-      .catch(function (e) { DB = null; fileMode(cb, e.message); });
-  } else fileMode(cb, null);
+      .catch(function (e) { if (DB_REQUIRED) return dbFatal(e.message); DB = null; fileMode(cb, e.message); });
+  } else if (DB_REQUIRED) dbFatal('DATABASE_URL tanımlı değil');
+  else fileMode(cb, null);
+}
+// v10.20: DB_REQUIRED=1 (kendi sunucumuzda açık) → veritabanına ulaşılamazsa dosya deposuna GEÇİLMEZ: sunucu dinlemeye başlamadan kapanır, hizmet yöneticisi birkaç saniye sonra
+// yeniden dener. Yoksa veritabanı geç açıldığında (ör. makine yeniden başlarken) sunucu boş bir dosya deposuyla açılır, oyuncular "hesap bulunamadı" alıp yeni misafir hesabına düşerdi.
+var DB_REQUIRED = /^(1|true|evet)$/i.test(String(process.env.DB_REQUIRED || '').trim());
+function dbFatal(why) {
+  console.log('VERİTABANINA BAĞLANILAMADI (' + String(why || '?').slice(0, 200) + '). DB_REQUIRED açık: dosya deposuna geçilmez; sunucu kapanıyor, hizmet yeniden deneyecek.');
+  setTimeout(function () { process.exit(1); }, 300);
 }
 function fileMode(cb, why) {
   mode = 'dosya';

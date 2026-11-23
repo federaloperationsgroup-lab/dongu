@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Sunucunun hangi alan adlarından yayın yapacağını ayarlar. HTTPS sertifikasını Caddy kendisi alır ve yeniler
+# (alan adı önceden bu sunucunun IP adresine yönlendirilmiş olmalı).
+#   dongu-alan                                        → alan adı yok: yalnız http://SUNUCU-IP (ilk deneme)
+#   dongu-alan tr.dongu.app                           → deneme adresi
+#   dongu-alan dongu.app www.dongu.app tr.dongu.app   → asıl adres (ilk yazılan asıl addır; ötekiler ona yönlenir)
+# Cloudflare'de bu kayıtlar "DNS only" (gri bulut) olmalıdır: oyuncu trafiği doğrudan bu sunucuya gelir, araya başka şirket girmez.
+set -euo pipefail
+ENVF=${DONGU_ENV:-/etc/dongu/dongu.env}; CF=${DONGU_CADDYFILE:-/etc/caddy/Caddyfile}; GRP=${DONGU_GRP:-dongu}
+PORT=$(grep -E '^PORT=' "$ENVF" | cut -d= -f2); PORT=${PORT:-8080}
+for d in "$@"; do
+  [[ "$d" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || { echo "Geçersiz alan adı: $d (küçük harfle ve https:// olmadan yazın; ör. tr.dongu.app). Hiçbir şey değiştirilmedi."; exit 1; }
+done
+MYIP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit }}' || true)
+for d in "$@"; do
+  A=$(getent ahostsv4 "$d" 2>/dev/null | awk '{print $1; exit}' || true)
+  if [ -z "$A" ]; then echo "UYARI: $d henüz hiçbir yere yönlenmiyor (Cloudflare'de kaydı açılmalı). Sertifika, kayıt açıldıktan sonra kendiliğinden alınır."
+  elif [ -n "$MYIP" ] && [ "$A" != "$MYIP" ]; then echo "UYARI: $d şu an bu sunucuya ($MYIP) değil $A adresine gidiyor. Cloudflare'de kayıt bu sunucunun IP adresine ve \"DNS only\" (gri bulut) olarak ayarlanmalı; yoksa sertifika alınamaz."; fi
+done
+if [ $# -gt 0 ]; then SITE=$(printf '%s, ' "$@"); SITE=${SITE%, }; else SITE=":80"; fi
+TMP=$(mktemp)
+cat > "$TMP" <<CADDY
+# Döngü — dongu-alan tarafından yazıldı; elle düzenlemeyin (komut yeniden çalıştırılınca üzerine yazılır).
+# Erişim günlüğü tutulmaz (log yönergesi yok): oyuncuların IP adresi ve istekleri diske yazılmaz.
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
+${SITE} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:${PORT} {
+		# İstemcinin kendi yazabileceği başlık silinir; gerçek IP adresini Caddy (X-Forwarded-For) kendisi bildirir
+		header_up -CF-Connecting-IP
+	}
+}
+CADDY
+if ! OUT=$(caddy validate --config "$TMP" --adapter caddyfile 2>&1); then
+  echo "HATA: web sunucusu ayarı geçersiz bulundu; hiçbir şey değiştirilmedi. Bu ekranın görüntüsünü Claude'a gönderin."; echo "$OUT" | tail -n 6; rm -f "$TMP"; exit 1
+fi
+install -m 644 "$TMP" "$CF"; cp "$CF" "$CF.dongu"; rm -f "$TMP"
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
+# Asıl alan adı: ilk yazılan. Oyun sunucusu öteki adlardan gelenleri ona yönlendirir. Tek ad verildiyse yönlendirme kapalıdır.
+CANON=""; if [ $# -gt 1 ]; then CANON="$1"; fi
+CUR=$(grep -E '^CANON_HOST=' "$ENVF" | cut -d= -f2- || true)
+if [ "$CUR" != "$CANON" ]; then
+  umask 077; T2=$(mktemp); grep -v -E '^CANON_HOST=' "$ENVF" > "$T2" || true; printf 'CANON_HOST=%s\n' "$CANON" >> "$T2"
+  install -o root -g "$GRP" -m 640 "$T2" "$ENVF"; rm -f "$T2"
+  systemctl restart dongu
+fi
+if [ $# -eq 0 ]; then echo "Alan adı yok: oyun yalnız http://${MYIP:-SUNUCU-IP} adresinden açılır (deneme)."
+else
+  echo "Alan adları: $*"
+  if [ -n "$CANON" ]; then echo "Asıl adres: https://$CANON (ötekiler buraya yönlenir)"; fi
+  echo "Sertifika yarım dakika içinde alınır. Denetim için tarayıcıda açın: https://$1/durum"
+fi

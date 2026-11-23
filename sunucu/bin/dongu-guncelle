@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# GitHub'daki main dalında yeni sürüm varsa indirir ve oyun sunucusunu yeniden başlatır; yeni sürüm açılmazsa öncekine döner.
+# 2 dakikada bir kendiliğinden çalışır (dongu-guncelle.timer). Elle:
+#   dongu-guncelle             → yeni sürüm var mı bak
+#   dongu-guncelle --zorla     → değişiklik olmasa da sunucuyu yeniden kur ve başlat
+#   dongu-guncelle --betikler  → yardımcı komutları (dongu-…) ve hizmet tanımlarını depodaki son hâline getir
+# Güvenlik: yardımcı komutlar yönetici yetkisiyle çalıştığı için kendiliğinden güncellenmez; yalnız --betikler ile, elle.
+set -uo pipefail
+APP=${DONGU_APP:-/opt/dongu/app}; ENVF=${DONGU_ENV:-/etc/dongu/dongu.env}; LOG=${DONGU_LOG:-/var/log/dongu-guncelle.log}
+STATE=${DONGU_STATE:-/var/lib/dongu-guncelle}; RUNAS=${DONGU_RUNAS-sudo -u dongu -H}; BIN=${DONGU_BIN:-/usr/local/bin}; UNITS=${DONGU_UNITS:-/etc/systemd/system}
+mode=${1:-}
+say() { if [ -t 1 ]; then echo "$*"; fi; }                    # yalnız elle çalıştırılınca ekrana yazar
+log() { echo "$(date '+%F %T') $*" >> "$LOG"; say "$*"; }
+mkdir -p "$STATE"
+exec 9>"${DONGU_LOCK:-/run/dongu-guncelle.lock}"   # aynı anda tek güncelleme (kilit; başlatılan hizmetlere devredilmez: 9>&-)
+flock -n 9 || { say "Başka bir güncelleme sürüyor; birazdan yeniden deneyin."; exit 0; }
+cd "$APP" || exit 1
+
+if [ "$mode" = "--betikler" ]; then
+  install -m 755 "$APP"/sunucu/bin/* "$BIN"/ || exit 1
+  install -m 644 "$APP"/sunucu/systemd/*.service "$APP"/sunucu/systemd/*.timer "$UNITS"/ || exit 1
+  systemctl daemon-reload
+  log "yardımcı komutlar ve hizmet tanımları güncellendi ($($RUNAS git rev-parse --short HEAD))"
+  exit 0
+fi
+
+if [ -e "$STATE/tasima-suruyor" ]; then say "Veri taşıma tamamlanmamış; güncelleme bekletiliyor (dongu-tasi)."; exit 0; fi
+old=$($RUNAS git rev-parse HEAD) || exit 1
+if ! $RUNAS git fetch -q --depth 1 origin main 2>/dev/null; then
+  [ -e "$STATE/ulasilamadi" ] || log "GitHub'a ulaşılamadı; ulaşılınca kendiliğinden yeniden bakılacak"   # kesinti boyunca tek satır
+  : > "$STATE/ulasilamadi"; exit 0
+fi
+if [ -e "$STATE/ulasilamadi" ]; then rm -f "$STATE/ulasilamadi"; log "GitHub'a yeniden ulaşıldı"; fi
+new=$($RUNAS git rev-parse FETCH_HEAD) || exit 1
+force=0; [ "$mode" = "--zorla" ] && force=1
+if [ "$old" = "$new" ] && [ $force = 0 ]; then say "Yeni sürüm yok (kurulu: ${old:0:7})."; exit 0; fi
+# Açılmadığı görülmüş sürüm yeniden denenmez (sunucu 2 dakikada bir kapanıp açılmasın); GitHub'a yeni gönderim gelince denenir
+if [ $force = 0 ] && [ "$new" = "$(cat "$STATE/acilmayan" 2>/dev/null)" ]; then say "GitHub'daki sürüm (${new:0:7}) daha önce açılmadı; yeni gönderim bekleniyor. Yine de denemek için: dongu-guncelle --zorla"; exit 0; fi
+
+files=$($RUNAS git diff --name-only "$old" "$new" 2>/dev/null || true)
+changed=$(echo "$files" | grep -E '^[^/]+\.(js|json|zip)$' || true)    # depo kökündeki sunucu dosyaları; mobil kabuk ve kaynak klasörü sunucuyu ilgilendirmez
+$RUNAS git update-ref refs/dongu/onceki "$old" 2>/dev/null || true       # geri dönüş için önceki sürüm elde tutulur
+$RUNAS git reset -q --hard "$new" || { log "HATA: ${new:0:7} sürümüne geçilemedi"; exit 1; }
+if echo "$files" | grep -q '^sunucu/'; then log "not: yardımcı komutlar depoda değişti; uygulamak için: dongu-guncelle --betikler"; fi
+if [ -z "$changed" ] && [ $force = 0 ]; then log "${new:0:7}: sunucu dosyası değişmedi; yeniden başlatılmadı"; exit 0; fi
+deps() { $RUNAS npm install --omit=dev --no-audit --no-fund >> "$LOG" 2>&1 || log "UYARI: bağımlılıklar kurulamadı (npm install)"; }
+if echo "$changed" | grep -q '^package\.json$' || [ ! -d "$APP/node_modules" ]; then deps; fi
+
+PORT=$(grep -E '^PORT=' "$ENVF" 2>/dev/null | cut -d= -f2); PORT=${PORT:-8080}
+up() { for _ in $(seq 1 "${DONGU_WAIT:-60}"); do sleep 1; if curl -fsS -m 3 "http://127.0.0.1:${PORT}/durum" >/dev/null 2>&1; then return 0; fi; done; return 1; }
+systemctl restart dongu 9>&-
+if up; then
+  rm -f "$STATE/acilmayan"
+  log "${new:0:7} yayında ($(curl -fsS -m 3 "http://127.0.0.1:${PORT}/durum" 2>/dev/null | grep -o 'Sürüm: v[0-9.]*[0-9]' | head -1))"
+  exit 0
+fi
+log "HATA: ${new:0:7} açılmadı; önceki sürüme (${old:0:7}) dönülüyor"
+echo "$new" > "$STATE/acilmayan"
+$RUNAS git reset -q --hard "$old"
+if echo "$changed" | grep -q '^package\.json$'; then deps; fi
+systemctl restart dongu 9>&-
+if up; then log "önceki sürüm (${old:0:7}) yeniden yayında"; else log "HATA: önceki sürüm de açılmadı; 'journalctl -u dongu -n 50' ile bakın"; fi
+exit 1

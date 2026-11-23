@@ -16,7 +16,7 @@ jobs:
         with: { node-version: '22' }   # v10.19: Capacitor 8 komut satırı Node 22 ister
       - name: Bağımlılıklar
         working-directory: mobile
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund && sh optional-plugins.sh   # v10.20: reklam eklentisi yalnız app-config.json "ads": true iken
       - name: Web paketi (www)
         working-directory: mobile
         run: sh prepare-www.sh

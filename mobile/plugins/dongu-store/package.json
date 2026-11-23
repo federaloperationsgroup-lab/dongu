@@ -1,0 +1,13 @@
+{
+  "name": "dongu-store",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Döngü mağaza eklentisi: Google Play Faturalandırma'ya doğrudan bağlanır (aracı hizmet yok). Yalnız ürün fiyatı, satın alma, bekleyen satın almalar ve tüketme.",
+  "license": "UNLICENSED",
+  "capacitor": {
+    "android": { "src": "android" }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  }
+}

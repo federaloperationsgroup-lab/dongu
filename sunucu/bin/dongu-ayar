@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Sunucu ayarını değiştirir ve oyun sunucusunu yeniden başlatır. Değer ekranda görünmez, günlüğe yazılmaz.
+#   dongu-ayar                    → ayar adlarını listeler (değerler gösterilmez)
+#   dongu-ayar ADMIN_KEY          → değeri sorar (yazdıklarınız görünmez)
+#   dongu-ayar IAP_SANDBOX_OK ""  → değeri boşaltır (ör. herkese açık yayında deneme satın almasını kapatmak)
+set -euo pipefail
+ENVF=${DONGU_ENV:-/etc/dongu/dongu.env}; GRP=${DONGU_GRP:-dongu}
+[ -s "$ENVF" ] || { echo "Ayar dosyası yok: önce kurulum (kur.sh) çalıştırılmalı."; exit 1; }
+if [ $# -eq 0 ]; then echo "Ayarlar (değerler gösterilmez):"; grep -E '^[A-Z][A-Z0-9_]*=' "$ENVF" | sed -E 's/^([A-Z0-9_]+)=.+$/  \1 = (dolu)/; s/^([A-Z0-9_]+)=$/  \1 = (boş)/'; exit 0; fi
+K="$1"; [[ "$K" =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo "Ayar adı büyük harf, rakam ve _ içerebilir (ör. ADMIN_KEY)."; exit 1; }
+case "$K" in DATABASE_URL|PORT) echo "$K elle değiştirilmez (veritabanı ve web sunucusu ona göre kuruludur)."; exit 1;; esac
+if [ $# -ge 2 ]; then V="$2"; else read -rs -p "$K için yeni değer (yazdıklarınız görünmez, sonra Enter): " V; echo; fi
+if [[ "$V" == *$'\n'* || "$V" == *\'* || "$V" == *\"* || "$V" == *\\* || "$V" == \ * || "$V" == *\  ]]; then echo "Değer tek satır olmalı; tırnak, ters eğik çizgi ya da baş/son boşluk içeremez. Hiçbir şey değiştirilmedi."; exit 1; fi
+umask 077; TMP=$(mktemp)
+grep -v -E "^${K}=" "$ENVF" > "$TMP" || true; printf '%s=%s\n' "$K" "$V" >> "$TMP"
+install -o root -g "$GRP" -m 640 "$TMP" "$ENVF"; rm -f "$TMP"
+systemctl restart dongu; echo "$K güncellendi; oyun sunucusu yeniden başlatıldı."
