@@ -84,8 +84,9 @@ const L = require('./qa_lib.js'); const fs = require('fs'); const path = require
     sinif: /@CapacitorPlugin\(name = "DonguStore"\)/.test(jv) && ['getProducts', 'purchase', 'pending', 'finish'].every((m) => new RegExp('@PluginMethod\\s+public void ' + m + '\\(').test(jv)) && /setObfuscatedAccountId/.test(jv) && /notifyListeners\("purchases"/.test(jv) && /enablePendingPurchases/.test(jv),
     oyun: ['getProducts', 'purchase', 'pending', 'finish'].every((m) => new RegExp('P\\.' + m + '\\(').test(fs.readFileSync(L.ROOT + '/app.js', 'utf8'))) && !/Plugins\.Purchases|purchaseStoreProduct|rcAndroid/.test(fs.readFileSync(L.ROOT + '/app.js', 'utf8')),
     reklam: /"ads"|get\('ads'\)/.test(op) && /@capacitor-community\/admob/.test(op) && /if \[ "\$ADS" = "1" \]; then\s+ADID=\$\(cfg appIdAndroid/.test(pn) && /if not ads: c\.pop\('admob', None\)/.test(pw),
-    yedek: /android:allowBackup="false"/.test(pn) && /allowBackup kapatılamadı/.test(pn) };
-  ok(Object.keys(stOk).every((k) => stOk[k]), 'mağaza eklentisi (v10.20): paket tanımı, Faturalandırma Kitaplığı ' + bv + ', dört yöntem + olay oyundakiyle aynı adlarda; reklam yalnız ayarla; bulut yedeklemesi kapalı', JSON.stringify(stOk));
+    yedek: /android:allowBackup="false"/.test(pn) && /allowBackup kapatılamadı/.test(pn),
+    depo: fs.readFileSync(L.ROOT + '/mobile/.gitignore', 'utf8').split('\n').filter((l) => l.trim() && l[0] !== '#').every((l) => l[0] === '/') /* yok sayma kuralları köke bağlı olmalı: "android/" eklentinin kaynak klasörünü de depodan düşürür (v10.20 ilk derlemesi böyle kırıldı) */ };
+  ok(Object.keys(stOk).every((k) => stOk[k]), 'mağaza eklentisi (v10.20): paket tanımı, Faturalandırma Kitaplığı ' + bv + ', dört yöntem + olay oyundakiyle aynı adlarda; reklam yalnız ayarla; bulut yedeklemesi kapalı; yok sayma kuralları eklenti kaynağını depodan düşürmüyor', JSON.stringify(stOk));
   ok(errors.length === 0, 'sayfa hatası yok', errors.slice(0, 3).join(' | '));
   console.log('SONUÇ: ' + pass + ' PASS / ' + fail + ' FAIL'); await browser.close(); process.exit(0);
 })().catch((e) => { console.log('CRASH', e); process.exit(1); });
