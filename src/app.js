@@ -6,11 +6,11 @@
   if (window.DonguI18n && DonguI18n.en && window.Okey && Okey.COLORS) Okey.COLORS.splice(0, 4, 'Fire', 'Star', 'Water', 'Sun');
   var SC = 1; // sahne ölçeği (1600×900 -> ekran)
   var ME = 0;
-  var VERSION = '10.19';
+  var VERSION = '10.20';
   var INVITE_ON = true; // v10.10 (K177): masa daveti / "Bu grupla yeniden" / arkadaşla "Oyna" — sunucu desteğiyle birlikte açılır
   // v10.02 (K139): mağaza uygulaması (Capacitor, Android + iOS) — sayfa paketten (capacitor://localhost / https://localhost) açılır, sunucu sabit dongu.app
   var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  var CFG = window.DONGU_CONFIG || {}; // prepare-www.sh paketleme sırasında app-config.json'dan yazar (herkese açık ayarlar: RevenueCat SDK anahtarları vb.)
+  var CFG = window.DONGU_CONFIG || {}; // prepare-www.sh paketleme sırasında app-config.json'dan yazar (herkese açık ayarlar: sunucu adresi, satın alma ve reklam açık/kapalı; v10.20: pakette aracı hizmet anahtarı yok)
   var SRV = NATIVE && typeof CFG.server === 'string' && /^https?:\/\/[^\/]+$/.test(CFG.server) ? CFG.server : 'https://dongu.app'; // v10.18: uygulamanın sunucusu ayardan değiştirilebilir (deneme ortamı); varsayılan dongu.app
   var SERVER_HOST = NATIVE ? SRV.replace(/^https?:\/\//, '') : location.host, SERVER_ORIGIN = NATIVE ? SRV : '';
   function srvHost() { return SERVER_HOST; }
@@ -301,8 +301,8 @@
     var cb = $('cAdult'), go = $('cGo'); cb.onchange = function () { go.disabled = !cb.checked; };
     go.onclick = function () { if (!cb.checked) return; store('ao.consent', { v: CONSENT_V, at: Date.now(), adult: true }); overlay(null); next(); };
   }
-  // ---------- v10.03 (K140): mağaza satın almaları (Google Play / App Store, RevenueCat) ----------
-  var IAP = { products: [], prices: {}, ready: false, configuredFor: null, plugin: null, store: null };
+  // ---------- v10.03 (K140): mağaza satın almaları (Google Play / App Store). v10.20: aracı hizmet çıkarıldı; doğrulama doğrudan mağazayla, kendi sunucumuzda ----------
+  var IAP = { products: [], prices: {}, ready: false, configuredFor: null, plugin: null, store: null, srv: null, buying: false, sending: false, listening: false };
   // ---------- v10.19 (K208): ödüllü reklam — yalnız mağaza uygulamasında (AdMob eklentisi + app-config.json'da reklam birimi varsa) ----------
   // Reklamlar kişiselleştirilmemiş istenir (npa). Ödülü sunucu verir: /api/ads/start → reklam → /api/ads/claim (ya da Google'ın sunucu doğrulaması).
   // Web sürümünde, reklam ayarı olmayan pakette ve sunucu reklam ödülünü kapattığında (görünümde ads yok) "Altın Kazan" düğmesi hiç gösterilmez.
@@ -366,24 +366,68 @@
     var tick = function () { if ($('adGo') !== go || ADS.busy) return; var left = Math.ceil((until - Date.now()) / 1000); if (left > 0) { go.disabled = true; go.textContent = __L("Sonraki reklam: {0} sn", [(left)]); setTimeout(tick, 500); } else { go.disabled = false; go.textContent = __L("Reklamı izle"); } };
     tick(); go.onclick = function () { adWatch(go); };
   }
-  function iapPlugin() { try { return NATIVE && window.Capacitor.Plugins && window.Capacitor.Plugins.Purchases || null; } catch (e) { return null; } }
-  function iapKey() { var pf = ''; try { pf = window.Capacitor.getPlatform(); } catch (e) {} return pf === 'ios' ? (CFG.rcIos || '') : pf === 'android' ? (CFG.rcAndroid || '') : ''; }
-  function iapInit() { // hesap belli olunca: SDK'yı oyuncu kimliğiyle kur, mağaza fiyatlarını oku
-    var P = iapPlugin(), key = iapKey(); if (!P || !key || !ACC.auth) return;
-    if (IAP.configuredFor === ACC.auth.id) return; IAP.configuredFor = ACC.auth.id;
-    var done = function () { P.getOfferings().then(function (o) { var cur = o && o.current; var pk = cur ? (cur.availablePackages || []) : []; var all = o && o.all ? Object.keys(o.all).reduce(function (a, k) { return a.concat(o.all[k].availablePackages || []); }, []) : pk; (pk.length ? pk : all).forEach(function (pkg) { var pr = pkg.product || pkg.storeProduct; if (pr && pr.identifier) { IAP.prices[pr.identifier] = pr.priceString; IAP.store = IAP.store || {}; IAP.store[pr.identifier] = pr; } }); IAP.ready = true; iapProducts(function () { if (APP.state === 'LOBBY' && !$('overlay').firstChild) showLobby(); }); if ($('sGrid') && $('sTabs') && $('sTabs').querySelector('button.on') && /Altın|Gold/.test($('sTabs').querySelector('button.on').textContent)) showStore('altin'); }).catch(function () {}); };
-    try { P.configure({ apiKey: key, appUserID: ACC.auth.id }).then(done, function () { IAP.configuredFor = null; }); } catch (e) { IAP.configuredFor = null; }
+  // v10.20 (23 Kasım 2026): aracı hizmet yok. Uygulamadaki kendi eklentimiz (DonguStore) mağazanın ödeme penceresini açar; satın alma belirteci
+  // sunucuya gider, sunucu mağazaya doğrudan sorup altını hesaba işler ve "bitir" der; uygulama satın almayı mağazada bitirir (ürün yeniden alınabilir).
+  // Ödeme sırasında kapanan uygulama ve sonradan onaylanan (bekleyen) ödemeler açılışta ve mağazanın bildirimiyle toparlanır. CFG.store === false: bu pakette satın alma kapalı.
+  function iapPlugin() { try { return NATIVE && CFG.store !== false && window.Capacitor.Plugins && window.Capacitor.Plugins.DonguStore || null; } catch (e) { return null; } }
+  function iapStoreName() { var pf = ''; try { pf = window.Capacitor.getPlatform(); } catch (e) {} return pf === 'ios' ? 'apple' : 'play'; }
+  function iapInit() { // hesap belli olunca: mağaza fiyatlarını oku, teslim edilmemiş satın alma var mı bak
+    var P = iapPlugin(); if (!P || !ACC.auth) return;
+    if (IAP.configuredFor === ACC.auth.id) return; IAP.configuredFor = ACC.auth.id; IAP.ready = false;
+    iapProducts(function (list) {
+      if (!list.length || !IAP.srv || !IAP.srv[iapStoreName()]) { IAP.configuredFor = null; return; } // sunucuda mağaza doğrulaması kapalıysa satın alma açılmaz (ödeme alınıp altın verilememesin)
+      var ok = function (r) { IAP.store = IAP.store || {}; ((r && r.products) || []).forEach(function (pr) { if (pr && pr.id) { IAP.prices[pr.id] = pr.price; IAP.store[pr.id] = pr; } }); IAP.ready = true;
+        if (!IAP.listening && P.addListener) { IAP.listening = true; try { P.addListener('purchases', function (ev) { iapDeliver((ev && ev.purchases) || []); }); } catch (e) {} }
+        iapRecover();
+        if (APP.state === 'LOBBY' && !$('overlay').firstChild) showLobby();
+        if ($('sGrid') && $('sTabs') && $('sTabs').querySelector('button.on') && /Altın|Gold/.test($('sTabs').querySelector('button.on').textContent)) showStore('altin'); };
+      try { P.getProducts({ ids: list.map(function (x) { return x.id; }) }).then(ok, function () { IAP.configuredFor = null; }); } catch (e) { IAP.configuredFor = null; }
+    });
   }
-  function iapSync(cb) { api('/api/iap/sync', accBody(), function (e, r) { if (e) { if (cb) cb(e); return; } if (r.player) accApply(r.player); if (cb) cb(null, r); }); }
+  function iapSend(list, cb) { // satın almaları sunucuya bildir: doğrulanır ve hesaba işlenir; sunucunun "bitir" dedikleri mağazada bitirilir
+    var P = iapPlugin(), st = iapStoreName(); list = (list || []).filter(function (x) { return x && x.id && x.token; });
+    if (!P || !list.length) return cb(null, { credited: [], finish: [], results: [] });
+    api('/api/iap/sync', accBody({ purchases: list.map(function (x) { return { store: st, product: x.id, token: x.token }; }) }), function (e, r) {
+      if (e) return cb(e); if (r.player) accApply(r.player);
+      (r.finish || []).forEach(function (t) { try { P.finish({ token: t }).catch(function () {}); } catch (x) {} });
+      cb(null, r); });
+  }
+  function iapDeliver(list) { // ödeme penceresi dışında gelen satın almalar (açılıştaki kurtarma, bekleyen ödemenin onayı): sessizce işle, altın verildiyse bildir
+    list = (list || []).filter(function (x) { return x && x.state !== 'pending'; }); if (!list.length || IAP.sending || IAP.buying) return; IAP.sending = true;
+    iapSend(list, function (e, r) { IAP.sending = false; var c = (!e && r && r.credited) || []; if (!c.length) return;
+      var gold = c.reduce(function (n, x) { return n + (x.gold || 0); }, 0); sfx('place'); toast(__L("Bekleyen satın alman hesabına işlendi{0}.", [(gold ? __L(": +{0} altın", [(gold.toLocaleString(window.__LOC || 'tr-TR'))]) : '')]), '', 5000);
+      if (APP.state === 'LOBBY' && !$('overlay').firstChild) showLobby(); else if ($('sGrid') && $('sTabs') && $('sTabs').querySelector('button.on') && /Altın|Gold/.test($('sTabs').querySelector('button.on').textContent)) showStore('altin'); });
+  }
+  function iapRecover() { var P = iapPlugin(); if (!P || !ACC.auth) return; try { P.pending().then(function (r) { iapDeliver((r && r.purchases) || []); }, function () {}); } catch (e) {} }
   function iapBuy(prod, btn, after) { // after(verildi): satın alma hesaba işlenince (yoksa Altın Al sekmesi yenilenir)
     var P = iapPlugin(); if (!P || !IAP.ready) { toast(P ? __L("Mağaza bağlantısı henüz hazır değil; biraz sonra tekrar dene.") : __L("Satın alma yalnız Google Play / App Store uygulamasında."), 'warn'); return; }
     var sp = IAP.store && IAP.store[prod.id]; if (!sp) { toast(__L("Bu ürün mağazada henüz tanımlı değil."), 'warn'); return; }
-    btn.disabled = true;
-    P.purchaseStoreProduct({ product: sp }).then(function () { toast(__L("Ödeme alındı, hesabına işleniyor…"), ''); iapSync(function (e, r) { btn.disabled = false; if (e) { toast(__L("Ödeme alındı ama hesaba işlenemedi; \"Satın almaları geri yükle\" ile tekrar dene."), 'warn'); return; } var c = (r && r.credited) || []; if (c.length) { sfx('place'); toast(__L("{0} alındı: {1}{2}", [(prod.name), (c[0].gold ? __L("+{0} altın", [(c[0].gold.toLocaleString(window.__LOC || 'tr-TR'))]) : ''), (c[0].items && c[0].items.length ? __L(" · {0} karakter", [(c[0].items.length)]) : '')]), '', 5000); } else toast(__L("Satın alma kaydedildi; altın birazdan hesabında görünür."), ''); if (after) after(c.length > 0); else showStore('altin'); }); })
-      .catch(function (e) { btn.disabled = false; if (e && (e.userCancelled || /cancel/i.test(e.message || ''))) return; toast(__L("Satın alma tamamlanamadı: {0}", [((e && e.message) || __L("mağaza hatası"))]), 'warn'); });
+    if (IAP.buying) return; IAP.buying = true; btn.disabled = true;
+    var end = function () { IAP.buying = false; btn.disabled = false; }, waitMsg = function () { toast(__L("Ödemen onay bekliyor. Onaylanınca altın hesabına kendiliğinden işlenir."), '', 6000); };
+    P.purchase({ id: prod.id, account: ACC.auth.id }).then(function (res) {
+      var paid = ((res && res.purchases) || []).filter(function (x) { return x && x.state !== 'pending'; });
+      if (!paid.length) { end(); waitMsg(); if (after) after(false); return; } // bekleyen ödeme (ör. nakit ödeme noktası): onaylanınca kendiliğinden işlenir
+      toast(__L("Ödeme alındı, hesabına işleniyor…"), '');
+      iapSend(paid, function (e, r) { end(); if (e) { toast(__L("Ödeme alındı ama hesaba işlenemedi; \"Satın almaları geri yükle\" ile tekrar dene."), 'warn'); return; }
+        var c = (r && r.credited) || [], st = ((r && r.results) || []).map(function (x) { return x.state; });
+        if (c.length) { sfx('place'); toast(__L("{0} alındı: {1}{2}", [(prod.name), (c[0].gold ? __L("+{0} altın", [(c[0].gold.toLocaleString(window.__LOC || 'tr-TR'))]) : ''), (c[0].items && c[0].items.length ? __L(" · {0} karakter", [(c[0].items.length)]) : '')]), '', 5000); }
+        else if (st.indexOf('pending') >= 0) waitMsg();
+        else if (st.indexOf('dup') >= 0) toast(__L("Bu satın alma zaten hesabına işlenmiş."), '');
+        else toast(__L("Ödeme alındı ama hesaba işlenemedi; \"Satın almaları geri yükle\" ile tekrar dene."), 'warn');
+        if (after) after(c.length > 0); else showStore('altin'); }); })
+      .catch(function (e) { end(); var code = e && e.code;
+        if (code === 'cancelled' || (e && e.userCancelled) || /cancel|iptal/i.test((e && e.message) || '')) return;
+        if (code === 'owned') { toast(__L("Bu üründe tamamlanmamış bir satın alman var; hesabına işleniyor…"), ''); iapRecover(); return; } // önceki ödeme teslim edilmeden kalmış: mağazadaki satın alma hesaba işlenir
+        var why = code === 'network' ? __L("Google Play'e ulaşılamadı; bağlantını denetleyip tekrar dene.") : code === 'billing_unavailable' ? __L("Bu cihazda Google Play ödemesi kullanılamıyor.") : code === 'unavailable' ? __L("Bu ürün mağazada bulunamadı.") : ((e && e.message) || __L("mağaza hatası"));
+        toast(__L("Satın alma tamamlanamadı: {0}", [(why)]), 'warn'); });
   }
-  function iapRestore(btn) { var P = iapPlugin(); if (!P) return; btn.disabled = true; P.restorePurchases().then(function () { iapSync(function (e, r) { btn.disabled = false; var n = r && r.credited ? r.credited.length : 0; toast(n ? __L("{0} satın alma hesabına işlendi.", [(n)]) : __L("Eksik satın alma bulunamadı."), ''); showStore('altin'); }); }).catch(function () { btn.disabled = false; toast(__L("Geri yükleme başarısız."), 'warn'); }); }
-  function iapProducts(cb) { if (IAP.products.length) return cb(IAP.products); api('/api/iap/products', {}, function (e, r) { if (!e && r && r.products) IAP.products = r.products; cb(IAP.products); }); }
+  function iapRestore(btn) { var P = iapPlugin(); if (!P) return; btn.disabled = true;
+    P.pending().then(function (r) { var all = (r && r.purchases) || [], paid = all.filter(function (x) { return x && x.state !== 'pending'; });
+      iapSend(paid, function (e, rr) { btn.disabled = false; if (e) { toast(__L("Geri yükleme başarısız."), 'warn'); return; } var n = rr && rr.credited ? rr.credited.length : 0;
+        toast(n ? __L("{0} satın alma hesabına işlendi.", [(n)]) : all.length > paid.length ? __L("Ödemen onay bekliyor. Onaylanınca altın hesabına kendiliğinden işlenir.") : __L("Eksik satın alma bulunamadı."), ''); showStore('altin'); });
+    }).catch(function () { btn.disabled = false; toast(__L("Geri yükleme başarısız."), 'warn'); }); }
+  function iapProducts(cb) { if (IAP.products.length) return cb(IAP.products); if (!selfHosted()) return cb(IAP.products); // dosya modunda sunucu yok: ürün listesi istenmez
+    api('/api/iap/products', {}, function (e, r) { if (!e && r && r.products) { IAP.products = r.products; IAP.srv = r.store || null; } cb(IAP.products); }); }
   function renderGoldStore(grid) {
     grid.innerHTML = __L("<p class=\"note\">Yükleniyor…</p>");
     iapProducts(function (list) {

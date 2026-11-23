@@ -1,7 +1,7 @@
 // Sunucu ekonomi / sosyal / moderasyon (ham WebSocket + HTTP, PORT 8768):
 // giriş altınlı masa (Bronz): seviye kilidi, yetersiz altın, emanet, 1 elin sonunda havuz dağılımı (altın korunur), AFK oyuncu hükmen son;
 // Usta masası bayraksız kapalı; rövanş oylaması; günlük ödül bir kez; /api/buy işlem kimliği (çift tahsilat yok); uygunsuz ad filtresi;
-// şikâyet + engel; davet (arkadaş odası, Hızlı Katıl reddi); /api/lig; IAP webhook gizli anahtarsız reddi; /durum gizli bot sayısı.
+// şikâyet + engel; davet (arkadaş odası, Hızlı Katıl reddi); /api/lig; eski IAP bildirim adresinin kapalı olması; /durum gizli bot sayısı.
 const S = require('./qa_srv.js'); const Economy = require('/home/claude/okey/economy.js');
 const PORT = 8768, KEY = 'test-anahtar-68', LOG = '/tmp/qa_server_econ.srv.log';
 (async () => {
@@ -69,7 +69,7 @@ const PORT = 8768, KEY = 'test-anahtar-68', LOG = '/tmp/qa_server_econ.srv.log';
   // lig
   const lig = await S.post(PORT, '/api/lig', { id: A.id, token: A.token }); ok(lig.json && !lig.json.error && (lig.json.season || lig.json.top || lig.json.list), '/api/lig yanıt', JSON.stringify(lig.json).slice(0, 160));
   // IAP webhook
-  const wh = await S.post(PORT, '/api/iap/webhook', { event: { type: 'TEST' } }); ok(wh.status === 401 || wh.status === 404 || wh.status === 403, 'IAP webhook gizli anahtarsız reddedilir (' + wh.status + ')', wh.body.slice(0, 100));
+  const wh = await S.post(PORT, '/api/iap/webhook', { event: { type: 'TEST' } }); ok(wh.status === 400 || wh.status === 404, 'eski RevenueCat bildirim adresi kaldırıldı (v10.20): istek reddedilir (' + wh.status + ')', wh.body.slice(0, 100));
   const prods = await S.post(PORT, '/api/iap/products', { id: A.id, token: A.token }); ok(prods.status === 200 || prods.status === 404, '/api/iap/products ' + prods.status + ' (RevenueCat yapılandırılmamış ortamda)', prods.body.slice(0, 100));
   console.log('SONUÇ: ' + pass + ' PASS / ' + fail + ' FAIL');
   await S.stop(srv); process.exit(0);

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Bütün testler sırayla (her biri kendi sunucusunu açar; server/data paylaşıldığı için aynı anda ikinci tur çalıştırılmaz).
-# Çıktı: tests/out/<ad>.out + tests/out/sonuc.log. Tek test: sh run_all.sh qa_engine
+# Çıktı: tests/out/<ad>.out + tests/out/sonuc.log. Tek test: sh run_all.sh qa_engine   (sunucu takımı tek başına: bash sunucu_smoke.sh)
 cd "$(dirname "$0")"; mkdir -p out; LOG=out/sonuc.log; : > $LOG
 export NODE_PATH=/opt/npm-tools/node_modules:/opt/node-tools/node_modules
 killsrv() { for p in $(pgrep -x node 2>/dev/null); do if tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | grep -q "^node server.js"; then kill $p 2>/dev/null; fi; done; sleep 0.5; }
@@ -13,4 +13,5 @@ for t in ${@:-$(ls qa_*.js | grep -v qa_lib | grep -v qa_srv | sed 's/\.js$//')}
 done
 killsrv
 sh pkg_smoke.sh > out/pkg_smoke.out 2>&1; echo "=== pkg_smoke: PASS $(grep -c '^PASS' out/pkg_smoke.out) / FAIL $(grep -c '^FAIL' out/pkg_smoke.out)" >> $LOG
+if [ -z "$1" ]; then bash sunucu_smoke.sh > out/sunucu_smoke.out 2>&1; echo "=== sunucu_smoke: PASS $(grep -c '^PASS' out/sunucu_smoke.out) / FAIL $(grep -c '^FAIL' out/sunucu_smoke.out)" >> $LOG; grep '^FAIL' out/sunucu_smoke.out | head -5 | cut -c1-300 >> $LOG; fi   # v10.20: Türkiye sunucusu takımı (yalnız tam turda)
 echo "bitti $(date +%H:%M:%S)" >> $LOG; cat $LOG

@@ -40,7 +40,7 @@ const PORT = 8777, KP = 8778, KEY = 'test-anahtar-77', LOG = '/tmp/qa_ads.srv.lo
   v = await me(A); ok(v.coins === c0 + 200 && v.ads.left === 0, 'günün 5 reklamı tamam: +200 altın, kalan 0', JSON.stringify(v.ads));
   r = await P('/api/ads/start', { id: A.id, token: A.token }); ok(r.status >= 400 && /hakkın bitti/.test(r.body), '6. reklam: "bugünkü hakkın bitti"', r.body.slice(0, 90));
   r = await P('/api/ads/status', { id: A.id, token: A.token }); ok(r.json && r.json.ads.left === 0 && r.json.coins === c0 + 200, 'durum sorgusu güncel: kalan 0, altın +200');
-  const d1 = (await S.get(PORT, '/durum')).body; ok(/Reklam ödülü: açık \(40 altın, günde 5\), Google doğrulaması kapalı, açılıştan beri 5 ödül/.test(d1) && /Satın alma: sunucu anahtarı YOK, bildirim anahtarı YOK, deneme satın alması ret/.test(d1) && !/SORUN/.test(d1), '/durum: reklam ve satın alma ayar özeti (anahtar yazılmaz)', (d1.match(/Satın alma:[^\n]*?ödül/) || [''])[0]);
+  const d1 = (await S.get(PORT, '/durum')).body; ok(/Reklam ödülü: açık \(40 altın, günde 5\), Google doğrulaması kapalı, açılıştan beri 5 ödül/.test(d1) && /Satın alma: Google Play doğrulaması KAPALI, deneme satın alması ret, iade taraması kapalı/.test(d1) && !/SORUN/.test(d1), '/durum: reklam ve satın alma ayar özeti (anahtar yazılmaz)', (d1.match(/Satın alma:[^\n]*?ödül/) || [''])[0]);
   await S.stop(srv);
   // bekleme süresi (varsayılan 60 sn)
   srv = S.start(PORT, { ADMIN_KEY: KEY, ADS_MIN_MS: '50' }, LOG); await S.up(PORT, LOG, true); const D = await S.guest(PORT, 'Bekleyen');

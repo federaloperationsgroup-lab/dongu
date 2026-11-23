@@ -1,22 +1,24 @@
-// Mağaza uygulaması benzetimi (v10.18; v10.19: ödüllü reklam — sahte AdMob eklentisi): sayfa "uygulamanın içindeymiş" gibi açılır (sahte Capacitor + sahte satın alma eklentisi + sahte RevenueCat REST)
+// Mağaza uygulaması benzetimi (v10.18; v10.19: ödüllü reklam — sahte AdMob eklentisi): sayfa "uygulamanın içindeymiş" gibi açılır (sahte Capacitor + sahte satın alma eklentisi (DonguStore) + sahte Google Play; v10.20: RevenueCat yok)
 // ve gerçek sunucu akışıyla denenir: satın alma kurulumu, mağaza fiyatları, satın alma → altın, vazgeçme, geri yükleme, Başlangıç Paketi teklifi
 // (altın yetmeyince / ilk maçtan sonra / günde bir / 3 kez), lobi (hediye işareti), ödüllü reklam (izle → altın, yarıda kapatma, reklam yok, vazgeçme,
 // çift dokunma, olay / bekçi yolları, günlük sınır, bekleme, izin formu, reklam ayarı olmayan paket), İngilizce. Ayrıca web sürümü: kurtarma kodu
-// (Ayarlar → Kodu göster → kopyala/yenile; giriş ekranı → Hesabımı geri yükle), web'de teklif ve hediye işareti yok. PORT 8775, sahte REST 8776.
-const S = require('./qa_srv.js'); const L = require('./qa_lib.js'); const http = require('http'); const fs = require('fs'); const path = require('path');
-const PORT = 8775, RC = 8776, KEY = 'test-anahtar-75', LOG = '/tmp/qa_native.srv.log', OUT = path.join(__dirname, 'out');
+// (Ayarlar → Kodu göster → kopyala/yenile; giriş ekranı → Hesabımı geri yükle), web'de teklif ve hediye işareti yok. PORT 8775, sahte Google 8776.
+const S = require('./qa_srv.js'); const L = require('./qa_lib.js'); const http = require('http'); const fs = require('fs'); const path = require('path'); const crypto = require('crypto');
+const PORT = 8775, GP = 8776, KEY = 'test-anahtar-75', LOG = '/tmp/qa_native.srv.log', OUT = path.join(__dirname, 'out');
 const BASE = 'http://127.0.0.1:' + PORT;
 const PRICES = { baslangic: '₺29,99', altin_kucuk: '₺49,99', altin_orta: '₺129,99', altin_buyuk: '₺299,99', altin_dev: '₺649,99' };
 function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortamı
-  window.DONGU_CONFIG = cfg.config; window.__CAP = { calls: [], next: '', adL: {}, appL: {}, adNext: '', adMs: 800, consent: false };
+  window.DONGU_CONFIG = cfg.config; window.__CAP = { calls: [], next: '', adL: {}, appL: {}, stL: {}, owned: (cfg.owned || []).slice(), adNext: '', adMs: 800, consent: false };
   const fire = (ev, d) => { (window.__CAP.adL[ev] || []).forEach((f) => { try { f(d || {}); } catch (e) {} }); }, RW = { type: 'altin', amount: 1 };
-  const pkgs = Object.keys(cfg.prices).map((id) => ({ identifier: id, product: { identifier: id, priceString: cfg.prices[id] } }));
   window.Capacitor = { isNativePlatform: () => true, getPlatform: () => cfg.platform, Plugins: {
-    Purchases: {
-      configure: (o) => { window.__CAP.calls.push(['configure', o.apiKey, o.appUserID]); window.__CAP.user = o.appUserID; return Promise.resolve(); },
-      getOfferings: () => Promise.resolve({ current: { availablePackages: pkgs }, all: {} }),
-      purchaseStoreProduct: (o) => { const id = o.product.identifier; window.__CAP.calls.push(['purchase', id]); if (window.__CAP.next === 'cancel') { window.__CAP.next = ''; return Promise.reject({ userCancelled: true, message: 'cancelled' }); } if (window.__CAP.next === 'fail') { window.__CAP.next = ''; return Promise.reject({ message: 'Kart reddedildi' }); } return window.__rcAdd(window.__CAP.user, id).then(() => ({})); },
-      restorePurchases: () => { window.__CAP.calls.push(['restore']); return Promise.resolve({}); } },
+    DonguStore: { // sahte mağaza eklentisi (mobile/plugins/dongu-store ile aynı adlar). next: '' (ödendi) | cancel | fail | pending (ödeme onay bekliyor) | owned (önceki ödeme teslim edilmemiş) | network
+      getProducts: (o) => { window.__CAP.calls.push(['products', (o.ids || []).join(',')]); return Promise.resolve({ products: (o.ids || []).filter((id) => cfg.prices[id]).map((id) => ({ id: id, price: cfg.prices[id], currency: 'TRY', title: id })) }); },
+      purchase: (o) => { window.__CAP.calls.push(['purchase', o.id, o.account]); const nx = window.__CAP.next; window.__CAP.next = '';
+        if (nx === 'cancel') return Promise.reject({ code: 'cancelled', message: 'iptal' }); if (nx === 'fail') return Promise.reject({ message: 'Kart reddedildi' }); if (nx === 'owned') return Promise.reject({ code: 'owned', message: 'Google Play 7' }); if (nx === 'network') return Promise.reject({ code: 'network', message: 'Google Play 2' });
+        return window.__gpBuy(o.account, o.id, nx === 'pending' ? 2 : 0).then((token) => { const pu = { id: o.id, token: token, state: nx === 'pending' ? 'pending' : 'purchased' }; window.__CAP.owned.push(pu); return { purchases: [pu] }; }); },
+      pending: () => { window.__CAP.calls.push(['pending']); return Promise.resolve({ purchases: window.__CAP.owned.map((x) => Object.assign({}, x)) }); },
+      finish: (o) => { window.__CAP.calls.push(['finish', o.token]); window.__CAP.owned = window.__CAP.owned.filter((x) => x.token !== o.token); return Promise.resolve({}); },
+      addListener: (ev, cb) => { (window.__CAP.stL[ev] = window.__CAP.stL[ev] || []).push(cb); return { remove: () => {} }; } },
     AdMob: { // sahte reklam eklentisi (@capacitor-community/admob ile aynı adlar). adNext: '' (sonuna kadar izlendi) | skip (yarıda kapatıldı; söz sonuçlanmaz) | nofill | eventonly (ödül yalnız olayla) | nodismiss (kapanış olayı gelmez) | silent (hiçbir olay gelmez, söz sonuçlanmaz)
       initialize: (o) => { window.__CAP.calls.push(['adinit', o]); return Promise.resolve(); },
       requestConsentInfo: () => { window.__CAP.calls.push(['consentinfo']); return Promise.resolve(window.__CAP.consent ? { status: 'REQUIRED', isConsentFormAvailable: true } : { status: 'NOT_REQUIRED', isConsentFormAvailable: false }); },
@@ -34,15 +36,22 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
 (async () => {
   let pass = 0, fail = 0; const ok = (c, n, x) => { c ? pass++ : fail++; console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? ' :: ' + String(x).slice(0, 320) : '')); };
   try { fs.unlinkSync(path.join(S.SRVDIR, 'data', 'purchases.jsonl')); } catch (e) {}
-  const SUBS = {}; let seq = 0, clock = Date.now() - 3600000;
-  const rc = http.createServer((q, r) => { const id = decodeURIComponent(q.url.split('/').pop()); r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ subscriber: { non_subscriptions: SUBS[id] || {} } })); }); await new Promise((r) => rc.listen(RC, '127.0.0.1', r));
-  const rcAdd = (player, product) => { seq++; clock += 60000; SUBS[player] = SUBS[player] || {}; (SUBS[player][product] = SUBS[player][product] || []).push({ id: 'rc_' + seq, store_transaction_id: 'GPA.' + seq, purchase_date: new Date(clock).toISOString(), store: 'play_store', is_sandbox: false }); return true; };
-  const srv = S.start(PORT, { ADMIN_KEY: KEY, RC_WEBHOOK_SECRET: 'wh-75', RC_SECRET_KEY: 'sk-75', RC_API_BASE: 'http://127.0.0.1:' + RC, ADS_MIN_MS: '900', ADS_COOLDOWN_MS: '0' }, LOG); /* reklam: sahte reklam 800 ms sürer (+350 ms kapanış payı) → 900 ms eşiğini geçer; adMs=1 ile "reklam bitmeden" yolu denenir */ await S.up(PORT, LOG, true);
+  // sahte Google: yetkilendirme (imza qa_iap'te denetlenir; burada yalnız erişim anahtarı verir) + Play Developer API (satın alma sorgusu, tüketme)
+  const GPP = {}; let seq = 0, clock = Date.now() - 3600000;
+  const SAKEY = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const gpBuy = (account, product, state) => { seq++; clock += 60000; const token = 'bbbb' + crypto.randomBytes(30).toString('base64url') + '.' + seq; GPP[token] = { productId: product, orderId: 'GPA.7500-' + seq, purchaseState: state || 0, consumptionState: 0, purchaseTimeMillis: String(clock), obfuscatedExternalAccountId: account, regionCode: 'TR' }; return token; };
+  const gp = http.createServer((q, r) => { const u = new URL(q.url, 'http://x'), send = (st, j) => { r.writeHead(st, { 'Content-Type': 'application/json' }); r.end(j == null ? '' : JSON.stringify(j)); }; q.resume();
+    if (u.pathname === '/token') return send(200, { access_token: 'ya29.native-test', expires_in: 3600 });
+    const m = u.pathname.match(/\/purchases\/products\/([^/]+)\/tokens\/([^/:]+)(:consume)?$/); if (!m) return send(404, {});
+    const pu = GPP[decodeURIComponent(m[2])]; if (!pu || pu.productId !== decodeURIComponent(m[1])) return send(404, {}); if (m[3]) { pu.consumptionState = 1; return send(204, null); } send(200, pu); });
+  await new Promise((r) => gp.listen(GP, '127.0.0.1', r));
+  const srv = S.start(PORT, { ADMIN_KEY: KEY, GP_SERVICE_ACCOUNT: JSON.stringify({ client_email: 'dongu-test@proje.iam.gserviceaccount.com', private_key: SAKEY }), GP_SERVICE_ACCOUNT_FILE: '', GP_API_BASE: 'http://127.0.0.1:' + GP, GP_TOKEN_URL: 'http://127.0.0.1:' + GP + '/token', GP_VOIDED_MS: '0', IAP_SANDBOX_OK: '', ADS_MIN_MS: '900', ADS_COOLDOWN_MS: '0' }, LOG); /* reklam: sahte reklam 800 ms sürer (+350 ms kapanış payı) → 900 ms eşiğini geçer; adMs=1 ile "reklam bitmeden" yolu denenir */ await S.up(PORT, LOG, true);
   const SET = { tutorialDone: true, welcomed: true, meldHinted: true, tipSkin: true, tipStore: true, sound: false, speed: 'fast', hints: false };
   const open = async (o) => { // o: { native, platform, lang, w, h, mobile }
     const b = await L.launch({ w: o.w || 1366, h: o.h || 768, mobile: o.mobile, lang: o.lang });
     await b.ctx.addInitScript((s) => { try { if (!localStorage.getItem('ao.settings')) localStorage.setItem('ao.settings', JSON.stringify(s)); if (!localStorage.getItem('ao.consent')) localStorage.setItem('ao.consent', JSON.stringify({ v: '1.1', at: Date.now(), adult: true })); } catch (e) {} }, SET);
-    if (o.native) { await b.ctx.exposeFunction('__rcAdd', rcAdd); await b.ctx.addInitScript(capInit, { config: Object.assign({ server: BASE, rcAndroid: 'goog_test', rcIos: 'appl_test' }, o.ads === false ? {} : { admob: { test: true, rewardedAndroid: 'ca-app-pub-0000/android-odul', rewardedIos: 'ca-app-pub-0000/ios-odul' } }), prices: PRICES, platform: o.platform || 'android' }); }
+    if (o.native) { await b.ctx.exposeFunction('__gpBuy', gpBuy); if (o.appleSrv) await b.ctx.route('**/api/iap/products', async (route) => { const resp = await route.fetch(), j = await resp.json(); j.store.apple = true; await route.fulfill({ response: resp, json: j }); }); /* appleSrv: sunucu App Store doğrulamasını destekliyormuş gibi (iPhone ekran metinleri denensin diye; gerçek destek ayrı sürümde) */
+      await b.ctx.addInitScript(capInit, { owned: o.owned || [], config: Object.assign({ server: BASE }, o.store === false ? { store: false } : {}, o.ads === false ? {} : { admob: { test: true, rewardedAndroid: 'ca-app-pub-0000/android-odul', rewardedIos: 'ca-app-pub-0000/ios-odul' } }), prices: PRICES, platform: o.platform || 'android' }); }
     await b.page.goto(BASE + '/'); return b; };
   const login = async (page) => { await page.waitForSelector('#gGuest', { timeout: 20000 }); await page.click('#gGuest'); await page.waitForSelector('#lbPlay', { timeout: 20000 }); await page.waitForTimeout(900); };
   const coins = (page) => page.evaluate(() => AO.wardrobe().coins); const toasts = async (page) => (await L.ui(page)).toasts.join(' | ');
@@ -56,7 +65,7 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   ok(await page.evaluate(() => DonguApp.NATIVE === true && DonguApp.srvHost() === '127.0.0.1:8775'), 'uygulama kipi: sunucu adresi ayardan (deneme sunucusu)');
   await page.waitForFunction(() => AO.iap.ready && AO.iap.products.length === 5, null, { timeout: 8000 }).catch(() => {});
   let st = await page.evaluate(() => ({ calls: window.__CAP.calls.slice(), ready: AO.iap.ready, n: AO.iap.products.length, prices: AO.iap.prices }));
-  ok(st.calls[0] && st.calls[0][0] === 'configure' && st.calls[0][1] === 'goog_test' && st.calls[0][2] === meId, 'satın alma eklentisi oyuncu kimliğiyle ve Android anahtarıyla kuruldu', JSON.stringify(st.calls[0]));
+  ok(st.calls.some((c) => c[0] === 'products' && c[1] === 'baslangic,altin_kucuk,altin_orta,altin_buyuk,altin_dev') && st.calls.some((c) => c[0] === 'pending') && !st.calls.some((c) => c[0] === 'purchase'), 'satın alma eklentisi: 5 ürünün mağaza fiyatı istendi, teslim edilmemiş satın alma soruldu', JSON.stringify(st.calls.filter((c) => /products|pending|purchase/.test(c[0])).slice(0, 4)));
   ok(st.ready && st.n === 5 && st.prices.baslangic === '₺29,99', 'mağaza fiyatları okundu, ürün listesi hazır', JSON.stringify(st.prices));
   await page.waitForTimeout(600);
   let lob = await page.evaluate(() => ({ nav: Array.from(document.querySelectorAll('.lnav .nav')).map((x) => x.id), reklam: !!document.querySelector('#nav-reklam'), soon: document.querySelectorAll('.lnav .soon').length, gift: !!document.querySelector('#nav-magaza .gift'), dotIn: !!document.querySelector('#nav-bonus .dot'), dotLoose: document.querySelectorAll('.lobby > .dot, #screen > .dot').length, over: document.documentElement.scrollWidth > window.innerWidth + 1, ov: !!document.querySelector('#overlay .card') }));
@@ -80,16 +89,31 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   ok(await coins(page) === c0 + 5000, 'Küçük Kese satın alındı: +5.000 altın hesapta', 'altın ' + (await coins(page)) + ' · ' + await toasts(page));
   ok(/5\.000/.test(await page.evaluate(() => (document.querySelector('.coinbox span') || document.querySelector('#sCoins') || document.body).textContent)) || true, 'altın göstergesi güncel');
   const srvCoins = (await S.post(PORT, '/api/me', await page.evaluate(() => AO.acc.auth))).json; ok((srvCoins.player || srvCoins).coins === c0 + 5000, 'sunucudaki bakiye aynı');
+  st = await page.evaluate(() => ({ buy: window.__CAP.calls.filter((c) => c[0] === 'purchase').pop(), fin: window.__CAP.calls.filter((c) => c[0] === 'finish').length, owned: window.__CAP.owned.length }));
+  ok(st.buy && st.buy[1] === 'altin_kucuk' && st.buy[2] === meId && st.fin === 1 && st.owned === 0, 'satın alma oyuncu kimliğiyle etiketlendi; hesaba işlenince mağazada bitirildi (ürün yeniden alınabilir)', JSON.stringify(st));
   // ---- vazgeçme ve hata
   await page.evaluate(() => { window.__CAP.next = 'cancel'; document.querySelectorAll('#sGrid .item.gold button.buy')[2].click(); }); await page.waitForTimeout(700);
   st = await page.evaluate(() => ({ dis: document.querySelectorAll('#sGrid .item.gold button.buy')[2].disabled, t: Array.from(document.querySelectorAll('.toast')).map((x) => x.textContent).join('|') }));
   ok(await coins(page) === c0 + 5000 && !st.dis && !/tamamlanamadı/.test(st.t), 'satın almadan vazgeçince: altın değişmez, düğme açık, hata bildirimi yok', st.t);
   await page.evaluate(() => { window.__CAP.next = 'fail'; document.querySelectorAll('#sGrid .item.gold button.buy')[2].click(); }); await page.waitForTimeout(700);
   ok(await coins(page) === c0 + 5000 && /tamamlanamadı/.test(await toasts(page)), 'mağaza hatasında: altın değişmez, açık bildirim', await toasts(page));
+  // ---- bekleyen ödeme: altın verilmez; onaylanınca mağazanın bildirimiyle kendiliğinden işlenir
+  await page.evaluate(() => { document.querySelectorAll('.toast').forEach((t) => t.remove()); window.__CAP.next = 'pending'; document.querySelectorAll('#sGrid .item.gold button.buy')[1].click(); }); await page.waitForTimeout(900);
+  ok(await coins(page) === c0 + 5000 && /onay bekliyor/.test(await toasts(page)) && (await page.evaluate(() => window.__CAP.owned.length)) === 1 && !(await page.evaluate(() => document.querySelectorAll('#sGrid .item.gold button.buy')[1].disabled)), 'bekleyen ödeme: altın verilmez, "onay bekliyor" bildirimi, satın alma mağazada duruyor, düğme açık', await toasts(page));
+  const pendTok = await page.evaluate(() => { document.querySelectorAll('.toast').forEach((t) => t.remove()); return window.__CAP.owned[0].token; }); GPP[pendTok].purchaseState = 0;
+  await page.evaluate(() => { const pu = window.__CAP.owned[0]; pu.state = 'purchased'; (window.__CAP.stL.purchases || []).forEach((f) => f({ purchases: [Object.assign({}, pu)] })); });
+  await page.waitForFunction((c) => AO.wardrobe().coins === c + 10000, c0, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(300);
+  ok(await coins(page) === c0 + 10000 && /Bekleyen satın alman hesabına işlendi: \+5\.000 altın/.test(await toasts(page)) && (await page.evaluate(() => window.__CAP.owned.length)) === 0, 'ödeme onaylanınca (mağaza bildirimi): +5.000 altın kendiliğinden işlendi ve mağazada bitirildi', await toasts(page));
   // ---- geri yükle: uygulama kapanmış, ödeme işlenmemiş kalmış gibi
-  rcAdd(meId, 'altin_orta'); await page.click('#iapRestore'); await page.waitForFunction((c) => AO.wardrobe().coins === c + 21500, c0, { timeout: 8000 }).catch(() => {});
-  ok(await coins(page) === c0 + 21500 && /1 satın alma/.test(await toasts(page)), '"Satın almaları geri yükle": işlenmemiş Orta Kese hesaba işlendi (+16.500)', await toasts(page));
-  await page.click('#iapRestore'); await page.waitForTimeout(900); ok(await coins(page) === c0 + 21500 && /Eksik satın alma bulunamadı/.test(await toasts(page)), 'ikinci geri yükleme: yeniden verilmez', await toasts(page));
+  await page.evaluate(async () => { const t = await window.__gpBuy(AO.acc.auth.id, 'altin_orta', 0); window.__CAP.owned.push({ id: 'altin_orta', token: t, state: 'purchased' }); }); await page.click('#iapRestore'); await page.waitForFunction((c) => AO.wardrobe().coins === c + 26500, c0, { timeout: 8000 }).catch(() => {});
+  ok(await coins(page) === c0 + 26500 && /1 satın alma/.test(await toasts(page)), '"Satın almaları geri yükle": işlenmemiş Orta Kese hesaba işlendi (+16.500)', await toasts(page));
+  await page.click('#iapRestore'); await page.waitForTimeout(900); ok(await coins(page) === c0 + 26500 && /Eksik satın alma bulunamadı/.test(await toasts(page)), 'ikinci geri yükleme: yeniden verilmez', await toasts(page));
+  // ---- "bu ürün zaten sende" (önceki ödeme teslim edilmeden kalmış) ve bağlantı hatası
+  await page.evaluate(async () => { document.querySelectorAll('.toast').forEach((t) => t.remove()); const t = await window.__gpBuy(AO.acc.auth.id, 'altin_kucuk', 0); window.__CAP.owned.push({ id: 'altin_kucuk', token: t, state: 'purchased' }); window.__CAP.next = 'owned'; document.querySelectorAll('#sGrid .item.gold button.buy')[1].click(); });
+  await page.waitForFunction((c) => AO.wardrobe().coins === c + 31500, c0, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(300);
+  ok(await coins(page) === c0 + 31500 && (await page.evaluate(() => window.__CAP.owned.length)) === 0 && !/tamamlanamadı/.test(await toasts(page)), 'mağaza "bu ürün zaten sende" derse: teslim edilmemiş satın alma hesaba işlenir (+5.000), hata bildirimi çıkmaz', await toasts(page));
+  await page.evaluate(() => { document.querySelectorAll('.toast').forEach((t) => t.remove()); window.__CAP.next = 'network'; document.querySelectorAll('#sGrid .item.gold button.buy')[1].click(); }); await page.waitForTimeout(600);
+  ok(await coins(page) === c0 + 31500 && /Google Play'e ulaşılamadı/.test(await toasts(page)) && !/Google Play 2/.test(await toasts(page)), 'mağazaya ulaşılamazsa anlaşılır bildirim (teknik kod gösterilmez)', await toasts(page));
   // ---- Başlangıç Paketi teklifi: altın yetmeyince
   await S.admin(PORT, KEY, meId, 'altin', -((await coins(page)) - 50)); await page.evaluate(() => new Promise((res) => DonguApp.api('/api/me', DonguApp.accBody(), (e, p) => { DonguApp.accApply(p); res(); })));
   const pricey = await page.evaluate(() => AO.CATALOG.filter((i) => !i.free && i.price > AO.wardrobe().coins && i.cat !== 'gold').map((i) => ({ id: i.id, cat: i.cat, name: i.name })));
@@ -172,9 +196,33 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   st = await page.evaluate(() => ({ ov: !!document.querySelector('#ofBuy'), gift: !!document.querySelector('#nav-magaza .gift'), n: DonguApp.settings.offer.n }));
   ok(!st.ov && !st.gift && st.n === 3, 'üç kez "Şimdi değil" denince teklif ve hediye işareti bir daha çıkmaz (paket mağazada durur)', JSON.stringify(st));
   await b.browser.close();
+  // ================= UYGULAMA: açılışta kurtarma (ödeme alınmış, uygulama kapanmış; satın alma mağazada duruyor) =================
+  const recTok = gpBuy('', 'altin_kucuk', 0);
+  b = await open({ native: true, owned: [{ id: 'altin_kucuk', token: recTok, state: 'purchased' }] }); page = b.page;
+  const recWait = page.waitForFunction(() => Array.from(document.querySelectorAll('.toast')).some((t) => /Bekleyen satın alman hesabına işlendi: \+5\.000 altın/.test(t.textContent)), null, { timeout: 30000 }).then(() => true, () => false); /* bildirim, yeni hesabın "Hoş geldin" bildirimiyle yer değiştirir: göründüğü an yakalanır */
+  await login(page);
+  await page.waitForFunction(() => window.__CAP.calls.some((c) => c[0] === 'finish'), null, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  st = await page.evaluate(() => ({ owned: window.__CAP.owned.length, fin: window.__CAP.calls.filter((c) => c[0] === 'finish').map((c) => c[1]) })); const recSeen = await recWait;
+  const recSrv = (await S.post(PORT, '/api/me', await page.evaluate(() => AO.acc.auth))).json; const recFile = fs.readFileSync(path.join(S.SRVDIR, 'data', 'purchases.jsonl'), 'utf8');
+  ok(st.owned === 0 && st.fin.join() === recTok && recSeen && (recSrv.player || recSrv).coins === (await coins(page)) && recFile.indexOf(GPP[recTok].orderId) > 0, 'açılışta teslim edilmemiş satın alma kendiliğinden hesaba işlendi (+5.000 bildirimi göründü) ve mağazada bitirildi', 'bildirim göründü: ' + recSeen + ' · ' + JSON.stringify(st).slice(0, 80));
+  ok(b.errors.length === 0, 'kurtarma oturumunda sayfa hatası yok', b.errors.join(' | '));
+  await b.browser.close();
+  // ================= UYGULAMA: satın alması kapalı paket (app-config.json store: false) =================
+  b = await open({ native: true, store: false }); page = b.page; await login(page); await page.waitForTimeout(900);
+  st = await page.evaluate(() => ({ ready: AO.iap.ready, calls: window.__CAP.calls.filter((c) => /products|purchase|pending|finish/.test(c[0])).length, gift: !!document.querySelector('#nav-magaza .gift') }));
+  ok(!st.ready && st.calls === 0 && !st.gift, 'satın alması kapalı pakette mağaza eklentisi hiç çağrılmaz, teklif işareti çıkmaz', JSON.stringify(st));
+  await b.browser.close();
   // ================= UYGULAMA (iPhone benzetimi, İngilizce) =================
-  b = await open({ native: true, platform: 'ios', lang: 'en', w: 844, h: 390, mobile: true }); page = b.page; await login(page); await page.waitForFunction(() => AO.iap.ready && AO.iap.products.length === 5, null, { timeout: 8000 }).catch(() => {});
-  st = await page.evaluate(() => window.__CAP.calls[0]); ok(st && st[1] === 'appl_test', 'iPhone: satın alma eklentisi iOS anahtarıyla kuruldu', JSON.stringify(st));
+  // v10.20: sunucuda App Store doğrulaması henüz yok → iPhone'da satın alma açılmaz (ödeme alınıp altın verilememesin)
+  b = await open({ native: true, platform: 'ios', lang: 'en', w: 844, h: 390, mobile: true }); page = b.page; await login(page); await page.waitForFunction(() => AO.iap.products.length === 5, null, { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  st = await page.evaluate(() => ({ ready: AO.iap.ready, calls: window.__CAP.calls.filter((c) => /products|purchase|pending/.test(c[0])).length, gift: !!document.querySelector('#nav-magaza .gift') }));
+  ok(!st.ready && st.calls === 0 && !st.gift, 'iPhone (bu sürüm): sunucuda App Store doğrulaması yokken mağaza açılmaz, eklenti çağrılmaz, hediye işareti yok', JSON.stringify(st));
+  await page.click('#lbPlus'); await page.waitForSelector('#sGrid .item.gold', { timeout: 6000 }); await page.evaluate(() => { document.querySelectorAll('#sGrid .item.gold button.buy')[1].click(); }); await page.waitForTimeout(500);
+  ok(/store connection isn't ready yet/.test(await toasts(page)) && !(await page.evaluate(() => window.__CAP.calls.some((c) => c[0] === 'purchase'))), 'iPhone (bu sürüm): satın al düğmesi "mağaza hazır değil" der, ödeme penceresi açılmaz', await toasts(page));
+  await b.browser.close();
+  // iPhone ekran metinleri (App Store adı, İngilizce): sunucu App Store doğrulamasını destekliyormuş gibi (appleSrv) denenir; gerçek destek ayrı sürümde gelecek
+  b = await open({ native: true, platform: 'ios', lang: 'en', w: 844, h: 390, mobile: true, appleSrv: true }); page = b.page; await login(page); await page.waitForFunction(() => AO.iap.ready && AO.iap.products.length === 5, null, { timeout: 8000 }).catch(() => {});
+  st = await page.evaluate(() => window.__CAP.calls.filter((c) => c[0] === 'products').length); ok(st === 1, 'iPhone (benzetim): mağaza fiyatları eklentiden istendi', String(st));
   await page.evaluate(() => { AO.acc.player.stats.matches = 1; AO.lobby(); }); await page.waitForSelector('#ofBuy', { timeout: 5000 }).catch(() => {});
   let en = await ovText(page); ok(/Starter Pack/.test(en) && /App Store/.test(en) && !/Google Play/.test(en) && /Not now/.test(en) && /Buy · ₺29,99/.test(en), 'iPhone + İngilizce teklif: App Store adı, başka mağaza adı yok, metin İngilizce', en.slice(0, 200));
   const TRW = /(Şimdi|Satın|Ödeme|üzerinden|altın|hesap başına|paraya)/; ok(!TRW.test(en), 'teklif penceresinde Türkçe kalıntı yok', (en.match(TRW) || [''])[0]);
@@ -246,6 +294,6 @@ function capInit(cfg) { // sayfa betiklerinden ÖNCE çalışır: uygulama ortam
   await p3.click('#sRecover'); await p3.waitForSelector('.reccode', { timeout: 6000 }); t3 = await ovText(p3); ok(/Account recovery code/.test(t3) && t3.indexOf(code2) >= 0 && !/(Kodu yenile|Kopyala|kimseyle)/.test(t3), 'İngilizce kod penceresi; kod aynı', t3.slice(0, 120));
   await b3.browser.close(); await b.browser.close();
   const slog = fs.readFileSync(LOG, 'utf8'); ok(!/TypeError|ReferenceError|Unhandled/i.test(slog), 'sunucu günlüğünde hata yok', (slog.match(/.*(TypeError|ReferenceError|Unhandled).*/) || [''])[0]);
-  await S.stop(srv); rc.close(); try { fs.unlinkSync(path.join(S.SRVDIR, 'data', 'purchases.jsonl')); } catch (e) {}
+  await S.stop(srv); gp.close(); try { fs.unlinkSync(path.join(S.SRVDIR, 'data', 'purchases.jsonl')); } catch (e) {}
   console.log('SONUÇ: ' + pass + ' PASS / ' + fail + ' FAIL'); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log('CRASH ' + (e && e.stack || e)); process.exit(2); });

@@ -1,5 +1,6 @@
 // Satın alma modülü (server/iap.js) GERÇEK PostgreSQL 16 üzerinde (canlıda depo Postgres/Neon): tablo kurulumu, ikinci kimlik sütunu,
-// işlem kimliği / ikinci kimlik / aynı an eşleşmesi, iade, bir kerelik paket, aynı anda gelen istekler (veritabanı yolunda her adım gerçekten eşzamansız).
+// işlem kimliği (Google sipariş numarası) / ikinci kimlik (belirteç özeti), iade, bir kerelik paket, aynı anda gelen istekler (veritabanı yolunda her adım gerçekten eşzamansız).
+// v10.20: RevenueCat çıktı; "aynı oyuncu + ürün + an" eşleşmesi kaldırıldı (aynı ana düşen iki ayrı sipariş ikisi de verilir).
 // Resmî `pg` paketi bu ortamda kurulamadığı için yalnız teste ait küçük bir bağlayıcı kullanılır (psql komutu; sunucu kodu değişmez: DB.query(sql, params) → Promise<{rows}>).
 // Postgres yoksa test ATLANIR (0 PASS / 0 FAIL yazar; başarılı sayılmaz).
 const { execFile, execFileSync } = require('child_process'); const path = require('path');
@@ -14,7 +15,7 @@ const P = {}, LOCK = {};
 const Accounts = { get(id, cb) { setTimeout(() => cb(null, P[id] ? JSON.parse(JSON.stringify(P[id])) : null), 3); }, save(p, cb) { setTimeout(() => { P[p.id] = JSON.parse(JSON.stringify(p)); cb(null); }, 3); },
   withLock(id, task) { const run = () => task(() => { const q = LOCK[id]; q.shift(); if (q.length) q[0](); else delete LOCK[id]; }); if (LOCK[id]) LOCK[id].push(run); else { LOCK[id] = [run]; run(); } }, publicView(p) { return { id: p.id, coins: p.coins, owned: p.owned }; } };
 const mk = (id, coins, owned) => (P[id] = { id, coins: coins || 0, owned: owned || [], avatar: { full: 'yok' } });
-process.env.RC_SECRET_KEY = ''; process.env.RC_WEBHOOK_SECRET = 'wh'; process.env.IAP_SANDBOX_OK = '';
+process.env.GP_SERVICE_ACCOUNT = ''; process.env.GP_SERVICE_ACCOUNT_FILE = ''; process.env.GP_VOIDED_MS = '0'; process.env.IAP_SANDBOX_OK = '';
 const Iap = require('/home/claude/okey/server/iap.js');
 const pc = (fn, ...a) => new Promise((res) => fn(...a, (e, r) => res({ e, r })));
 (async () => {
@@ -33,23 +34,27 @@ const pc = (fn, ...a) => new Promise((res) => fn(...a, (e, r) => res({ e, r })))
   r = await pc(Iap.credit, 'p_a', 'altin_kucuk', 'ESKI1', { at: 1700000000000 }); ok(r.r && r.r.dup && P.p_a.coins === 1000, 'eski düzen kayıt tanınır (yeniden verilmez)');
   P.p_a.coins = 6000; r = await pc(Iap.refund, 'ESKI1'); ok(r.r && r.r.ok && P.p_a.coins === 1000, 'eski kayıtta verilen miktar yok → iade ürün tanımına göre (−5.000)', JSON.stringify(r.r));
   // satın alma + tekrar
-  r = await pc(Iap.credit, 'p_a', 'altin_orta', 'S-100', { at: T, store: 'APP_STORE', price: 129.99, currency: 'TRY', raw: { via: 'webhook' } }); ok(r.r && r.r.ok && P.p_a.coins === 17500, 'Orta Kese: +16.500', r.e && r.e.message);
+  r = await pc(Iap.credit, 'p_a', 'altin_orta', 'S-100', { at: T, store: 'PLAY_STORE', price: 129.99, currency: 'TRY', raw: { via: 'play' } }); ok(r.r && r.r.ok && P.p_a.coins === 17500, 'Orta Kese: +16.500', r.e && r.e.message);
   r = await pc(Iap.credit, 'p_a', 'altin_orta', 'S-100', { at: T }); ok(r.r && r.r.dup && P.p_a.coins === 17500, 'aynı işlem kimliği: yeniden verilmez');
   let row = (await DB.query("SELECT tx, alt, player, product, store, price, currency, at, status, raw FROM purchases WHERE tx='S-100'")).rows[0];
-  ok(row && row.player === 'p_a' && +row.at === T && +row.price === 129.99 && row.currency === 'TRY' && row.raw && row.raw.gold === 16500 && row.raw.via === 'webhook', 'kayıt: oyuncu, an, fiyat, verilen altın satırda', JSON.stringify(row));
+  ok(row && row.player === 'p_a' && +row.at === T && +row.price === 129.99 && row.currency === 'TRY' && row.raw && row.raw.gold === 16500 && row.raw.via === 'play', 'kayıt: oyuncu, an, fiyat, verilen altın satırda', JSON.stringify(row));
   // aynı anda 8 istek, aynı kimlik
   let many = await Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(() => pc(Iap.credit, 'p_a', 'altin_kucuk', 'S-200', { at: T + 60000 })));
   ok(P.p_a.coins === 22500 && many.filter((m) => m.r && m.r.ok).length === 1 && many.filter((m) => m.r && m.r.dup).length === 7, 'aynı anda 8 istek (aynı kimlik): bir kez verildi', 'altın ' + P.p_a.coins + ' · ' + many.map((m) => m.e ? 'HATA' : m.r.ok ? 'ok' : 'dup').join(','));
-  // aynı anda iki FARKLI kimlik, aynı satın alma (eşitleme iç kimlik + bildirim mağaza kimliği)
-  many = await Promise.all([pc(Iap.credit, 'p_a', 'altin_buyuk', 'rc_300', { at: T + 120000, raw: { via: 'sync' } }), pc(Iap.credit, 'p_a', 'altin_buyuk', 'GPA.300', { at: T + 120400, raw: { via: 'webhook' } }), pc(Iap.credit, 'p_a', 'altin_buyuk', 'rc_300', { at: T + 120000 }), pc(Iap.credit, 'p_a', 'altin_buyuk', 'GPA.300', { at: T + 120400 })]);
-  ok(P.p_a.coins === 70500 && many.filter((m) => m.r && m.r.ok).length === 1, 'aynı anda farklı kimliklerle gelen aynı satın alma: bir kez verildi (+48.000)', 'altın ' + P.p_a.coins + ' · ' + many.map((m) => m.e ? 'HATA ' + m.e.message : m.r.ok ? 'ok' : 'dup').join(','));
-  row = (await DB.query("SELECT tx, alt FROM purchases WHERE tx IN ('rc_300','GPA.300')")).rows; ok(row.length === 1 && row[0].alt && row[0].alt !== row[0].tx, 'tek satır; öteki kimlik ikinci kimlik olarak yazıldı', JSON.stringify(row));
-  r = await pc(Iap.refund, row[0].alt); ok(r.r && r.r.ok && P.p_a.coins === 22500, 'iade ikinci kimlikle gelir: bulunur, −48.000', JSON.stringify(r.r));
+  // aynı anda dört istek: aynı sipariş numarası + aynı belirteç özeti (çift dokunma, açılıştaki kurtarma + düğme)
+  many = await Promise.all([1, 2, 3, 4].map(() => pc(Iap.credit, 'p_a', 'altin_buyuk', 'GPA.300', { at: T + 120000, alt: 'gpt:300', store: 'PLAY_STORE', raw: { via: 'play' } })));
+  ok(P.p_a.coins === 70500 && many.filter((m) => m.r && m.r.ok).length === 1, 'aynı anda dört istek (sipariş numarası + belirteç özeti): bir kez verildi (+48.000)', 'altın ' + P.p_a.coins + ' · ' + many.map((m) => m.e ? 'HATA ' + m.e.message : m.r.ok ? 'ok' : 'dup').join(','));
+  row = (await DB.query("SELECT tx, alt FROM purchases WHERE tx='GPA.300' OR alt='gpt:300'")).rows; ok(row.length === 1 && row[0].tx === 'GPA.300' && row[0].alt === 'gpt:300', 'tek satır; belirteç özeti ikinci kimlik olarak yazıldı', JSON.stringify(row));
+  r = await pc(Iap.refund, row[0].alt); ok(r.r && r.r.ok && P.p_a.coins === 22500, 'iade ikinci kimlikle (belirteç özeti) gelir: bulunur, −48.000', JSON.stringify(r.r));
   many = await Promise.all([pc(Iap.refund, row[0].tx), pc(Iap.refund, row[0].alt), pc(Iap.refund, row[0].tx)]); ok(P.p_a.coins === 22500 && many.every((m) => m.r && m.r.dup), 'aynı iade yeniden (iki kimlikle de): değişmez');
-  // ikinci kimlik açıkça verilirse (eşitleme: mağaza kimliği + iç kimlik)
-  r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'S-400', { at: T + 180000, alt: 'rc_400' }); ok(r.r && r.r.ok && P.p_c.coins === 5000, 'eşitleme kaydı: mağaza kimliği + iç kimlik');
-  r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'rc_400', { at: T + 999999 }); ok(r.r && r.r.dup && P.p_c.coins === 5000, 'iç kimlikle (başka anla) gelen aynı satın alma: yeniden verilmez');
-  r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'S-401', { at: T + 240000, alt: 'rc_401' }); ok(r.r && r.r.ok && P.p_c.coins === 10000, 'aynı üründen 1 dk sonraki ayrı satın alma verilir');
+  // aynı ana düşen iki AYRI sipariş: ikisi de verilir (v10.20'de "aynı an" kuralı kaldırıldı)
+  many = await Promise.all([pc(Iap.credit, 'p_a', 'altin_kucuk', 'GPA.310', { at: T + 130000, alt: 'gpt:310' }), pc(Iap.credit, 'p_a', 'altin_kucuk', 'GPA.311', { at: T + 130000, alt: 'gpt:311' })]);
+  ok(P.p_a.coins === 32500 && many.every((m) => m.r && m.r.ok), 'aynı oyuncu + aynı ürün + aynı an, ayrı sipariş: ikisi de verildi (+10.000)', 'altın ' + P.p_a.coins);
+  r = await pc(Iap.refund, 'GPA.310'); r = await pc(Iap.refund, 'gpt:311'); ok(P.p_a.coins === 22500, 'ikisinin iadesi ayrı ayrı bulunur (−10.000)', 'altın ' + P.p_a.coins);
+  // ikinci kimlikle (belirteç özeti) yeniden gelen aynı satın alma
+  r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'S-400', { at: T + 180000, alt: 'gpt:400' }); ok(r.r && r.r.ok && P.p_c.coins === 5000, 'kayıt: sipariş numarası + belirteç özeti');
+  r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'gpt:400', { at: T + 999999 }); ok(r.r && r.r.dup && P.p_c.coins === 5000, 'belirteç özetiyle (başka anla) gelen aynı satın alma: yeniden verilmez');
+  r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'S-401', { at: T + 240000, alt: 'gpt:401' }); ok(r.r && r.r.ok && P.p_c.coins === 10000, 'aynı üründen 1 dk sonraki ayrı satın alma verilir');
   r = await pc(Iap.credit, 'p_b', 'altin_kucuk', 'S-402', { at: T + 240000 }); ok(r.r && r.r.ok && P.p_b.coins === 5500, 'başka oyuncunun aynı andaki aynı ürünü ayrı satın almadır');
   r = await pc(Iap.credit, 'p_c', 'altin_kucuk', 'S-403', {}); ok(r.r && r.r.ok && P.p_c.coins === 15000, 'satın alma anı gelmezse (yalnız kimlikle) yine işlenir');
   // Başlangıç Paketi
@@ -68,7 +73,7 @@ const pc = (fn, ...a) => new Promise((res) => fn(...a, (e, r) => res({ e, r })))
   const li = await pc(Iap.list); ok(!li.e && li.r.length >= 10 && li.r[0].at >= li.r[li.r.length - 1].at && li.r.some((x) => x.status === 'refunded'), 'yönetim listesi: yeni → eski, iadeler işaretli', li.e ? li.e.message : li.r.length + ' satır');
   // modülü yeniden yükle (sunucu yeniden başladı): kayıtlar veritabanında
   delete require.cache[require.resolve('/home/claude/okey/server/iap.js')]; const Iap2 = require('/home/claude/okey/server/iap.js'); await new Promise((res) => Iap2.init({ accounts: Accounts, db: DB }, () => res()));
-  const before = P.p_a.coins; r = await pc(Iap2.credit, 'p_a', 'altin_orta', 'S-100', { at: T }); const r2 = await pc(Iap2.credit, 'p_a', 'altin_buyuk', 'GPA.300', { at: T + 120400 });
+  const before = P.p_a.coins; r = await pc(Iap2.credit, 'p_a', 'altin_orta', 'S-100', { at: T }); const r2 = await pc(Iap2.credit, 'p_a', 'altin_buyuk', 'GPA.300', { at: T + 120000, alt: 'gpt:300' });
   ok(r.r && r.r.dup && r2.r && r2.r.dup && P.p_a.coins === before, 'yeniden başlatmadan sonra: işlenmiş ve iade edilmiş kayıtlar yeniden verilmez');
   await DB.query('DROP TABLE IF EXISTS purchases');
   console.log('SONUÇ: ' + pass + ' PASS / ' + fail + ' FAIL  (' + DB.n + ' sorgu)'); process.exit(fail ? 1 : 0);

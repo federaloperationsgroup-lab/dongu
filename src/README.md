@@ -9,4 +9,6 @@ Depo kökü **yükleme paketidir** (Render bunu çalıştırır: server.js + pub
 - Sunucu dosyaları depo kökündekilerle aynıdır (`server/` = kök).
 - `tests/`: test betikleri (pkg_smoke.sh; Playwright testleri yeniden yazıldıkça buraya eklenir).
 
-Çalışma klasörü kurulumu: `/home/claude/okey/` ← src/* + `server/` ← kök js dosyaları + `web/assets` ← assets.zip + public.zip içindeki assets.
+Çalışma klasörü kurulumu: `/home/claude/okey/` ← src/* + `server/` ← kök js dosyaları (+ package.json, README.md) + `web/assets` ← assets.zip + public.zip içindeki assets + `mobile/` ← kök `mobile/` + `ci/` ← `.github/workflows/` + `sunucu/` ← kök `sunucu/`.
+
+v10.20 (23 Kasım 2026): depo kökünde iki yeni klasör var. `mobile/plugins/dongu-store/` kendi Google Play ödeme eklentimizdir (RevenueCat çıkarıldı). `sunucu/` Türkiye'deki sunucunun kurulum takımıdır (`kur.sh` + `dongu-…` komutları; ayrıntı `sunucu/README.md`). `gh_push.sh` ikisini de çalışma klasöründen depoya eşitler; testi `tests/sunucu_smoke.sh`.
