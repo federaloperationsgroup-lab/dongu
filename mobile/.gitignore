@@ -1,7 +1,9 @@
-node_modules/
-www/
-android/
-ios/
-tmp_www/
-version.txt
-versioncode.txt
+# Üretilen klasörler (her derlemede sıfırdan kurulur). Baştaki / işareti yalnız bu klasörün kökünü kasteder:
+# "android/" yazılırsa eklentinin kendi android/ kaynak klasörü de (plugins/dongu-store/android) depoya girmez — v10.20'de ilk derleme bu yüzden kırıldı.
+/node_modules/
+/www/
+/android/
+/ios/
+/tmp_www/
+/version.txt
+/versioncode.txt

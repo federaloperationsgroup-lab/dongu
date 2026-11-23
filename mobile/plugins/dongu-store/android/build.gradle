@@ -1,0 +1,31 @@
+// Döngü mağaza eklentisi (Android). Uygulamanın Gradle projesine Capacitor tarafından alt proje olarak eklenir (npx cap sync);
+// Android Gradle eklentisi ve depo ayarları kök projeden gelir.
+// Google Play Faturalandırma Kitaplığı 8: Google Play 31 Ağustos 2026'dan beri yeni uygulama ve güncellemelerde 8 ve üzerini ister.
+apply plugin: 'com.android.library'
+
+android {
+    namespace = "app.dongu.store"
+    compileSdk = rootProject.ext.has('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
+    defaultConfig {
+        minSdkVersion rootProject.ext.has('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
+        targetSdkVersion rootProject.ext.has('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+    }
+    buildTypes {
+        release { minifyEnabled = false }
+    }
+    lint { abortOnError = false }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+    implementation 'com.android.billingclient:billing:8.0.0'
+}
